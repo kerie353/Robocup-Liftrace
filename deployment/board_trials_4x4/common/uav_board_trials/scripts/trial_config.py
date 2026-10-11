@@ -81,6 +81,9 @@ def flight_geometry(settings):
 
 def validate_settings(settings):
     release_heights(settings)
+    lead=settings.get('takeoff_z_lead_m',0.)
+    if isinstance(lead,bool) or not isinstance(lead,(int,float)) or not math.isfinite(lead) or not (lead==0 or .4<=lead<=.6):
+        raise ValueError('takeoff_z_lead_m must be 0 or [0.4, 0.6] metres')
     budget=settings.get('motion_action_timeout',30.)
     if isinstance(budget,bool) or not isinstance(budget,(int,float)) or not math.isfinite(budget) or not 0<budget<=600:
         raise ValueError('Invalid motion_action_timeout; expected seconds in (0,600]')
@@ -253,6 +256,7 @@ def generate(root,out,settings,fc_xyz,rig):
         SurveyPolicy(**runtime['high_view_full']['policy'])
     control=yaml.safe_load((root/'patrol_uav_ws-patrol_planner/src/uav_mission/config/vcl06_horizontal_control.yaml').read_text())
     control.update(waypoints=[dict(x=x,y=y,z=(ground+settings['landing_transit_agl'] if mode=='landing' else low),yaw=0.,pointmode='Takeoff_point',hover_time=0.)],align_height=low,land_height=land_z,px4_max_distance=.25)
+    control['takeoff_z_lead_m']=float(settings.get('takeoff_z_lead_m',0.))
     control['switch']['auto_land']=h_landing;control['drop_system'].update(enable_drop=drop_enabled,
         release_setpoint_height=drop,release_min_height=ground+release_min,height_threshold=ground+release_max)
     control['switch']['flag_landing_detect']=1 if h_landing else 0
@@ -317,6 +321,7 @@ def generate(root,out,settings,fc_xyz,rig):
         control['px4_max_distance']=.4
     # application.launch loads overrides last, after the parent controller's defaults.
     overrides['/px4_max_distance']=control['px4_max_distance']
+    overrides['/takeoff_z_lead_m']=control['takeoff_z_lead_m']
     from uav_mission.navigation_recovery_config import recovery_parameters
     # Trials declare recovery off explicitly, including residual ROS-master parameters.
     overrides.update(recovery_parameters({},ground))

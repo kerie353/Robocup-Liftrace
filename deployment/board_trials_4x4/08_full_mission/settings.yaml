@@ -43,6 +43,6 @@ landing_posctl:
 # Resume at most once with original mission budget and existing fresh-map checks.
 resume_survey_enabled: true
 
-# 起飞专用 Z 领先量，单位米（非 m/s）；尚未实飞，不保证节时。
+# 起飞专用 Z 领先量，单位米；按用户要求默认关闭。
 # 可覆盖为 0 回退旧通用 3D 限幅，候选开启范围 [0.4, 0.6]。
-takeoff_z_lead_m: 0.6
+takeoff_z_lead_m: 0.0

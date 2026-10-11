@@ -26,12 +26,12 @@ def generated(fn,s):
         return [yaml.safe_load((Path(path)/(name+'.yaml')).read_text()) for name in ('runtime','control','overrides')]
 
 class TakeoffSettings(unittest.TestCase):
-    def test_all_nine_groups_only_08_opts_in(self):
+    def test_all_nine_groups_default_to_legacy(self):
         files=sorted(BASE.glob('*/settings.yaml'));self.assertEqual(len(files),9)
         for file in files:
             with self.subTest(group=file.parent.name):
                 _,c,o=generated(trial_generate,trial_settings(file))
-                expected=.6 if file.parent.name=='08_full_mission' else 0.
+                expected=0.
                 self.assertEqual(c['takeoff_z_lead_m'],expected)
                 self.assertEqual(o['/takeoff_z_lead_m'],expected)
 
@@ -45,21 +45,21 @@ class TakeoffSettings(unittest.TestCase):
                 self.assertEqual(after[0],before[0])
                 self.assertEqual(after[1]['takeoff_z_lead_m'],lead)
                 self.assertEqual(after[2]['/takeoff_z_lead_m'],lead)
-                after[1]['takeoff_z_lead_m']=.6;after[2]['/takeoff_z_lead_m']=.6
+                after[1]['takeoff_z_lead_m']=before[1]['takeoff_z_lead_m'];after[2]['/takeoff_z_lead_m']=before[2]['/takeoff_z_lead_m']
                 self.assertEqual(after,before)
         del s['takeoff_z_lead_m']
         self.assertEqual(generated(trial_generate,s)[1]['takeoff_z_lead_m'],0.)
 
     def test_formal_default_and_settings_override(self):
         s=formal_settings();before=generated(formal_generate,s)
-        self.assertEqual(before[1]['takeoff_z_lead_m'],.6)
-        self.assertEqual(before[2]['/takeoff_z_lead_m'],.6)
+        self.assertEqual(before[1]['takeoff_z_lead_m'],0.)
+        self.assertEqual(before[2]['/takeoff_z_lead_m'],0.)
         for lead in (0.,.4,.6):
             after=generated(formal_generate,{**s,'takeoff_z_lead_m':lead})
             self.assertEqual(after[0],before[0])
             self.assertEqual(after[1]['takeoff_z_lead_m'],lead)
             self.assertEqual(after[2]['/takeoff_z_lead_m'],lead)
-            after[1]['takeoff_z_lead_m']=.6;after[2]['/takeoff_z_lead_m']=.6
+            after[1]['takeoff_z_lead_m']=before[1]['takeoff_z_lead_m'];after[2]['/takeoff_z_lead_m']=before[2]['/takeoff_z_lead_m']
             self.assertEqual(after,before)
 
     def test_08_final_launch_and_both_profiles(self):

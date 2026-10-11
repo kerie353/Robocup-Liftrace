@@ -99,9 +99,9 @@ def main():
     conflicts=existing.intersection({'/laserMapping','/freedom','/patrol_control','/fast_planner_node','/navigation_frame_adapter','/navigation/mission_manager','/target_detector_rknn','/target_detector','/detection_fusion','/target_refiner','/target_map_projector','/target_memory','/cross_detector','/circle_detector','/landing_detector','/drop_aligner','/navigation/planner_bridge','/release_permission_arbiter','/guarded_servo_proxy','/trial_auto_land','/board_mock_servo','/trial_recorder','/trial_journal','/map_camera_alignment','/board_trial_bag'})
     if conflicts:raise RuntimeError('Stop the old application first: '+','.join(sorted(conflicts)))
     if '/mavros' not in existing:raise RuntimeError('Start device MAVROS and driver2 first')
-    model=a.model or Path(os.environ.get('UAV_VISION_RKNN_MODEL_PATH',str(a.root/'runtime_models/flight_5cls_20260928_fp16.rknn')))
+    model=a.model or Path(os.environ.get('UAV_VISION_RKNN_MODEL_PATH',str(a.root/'runtime_models/flight_5cls_new_video_v8_20261011/flight_5cls_new_video_v8_20261011_fp16.rknn')))
     if not model.is_file():raise RuntimeError('RKNN model not found; set UAV_VISION_RKNN_MODEL_PATH once or use --model')
-    metadata=a.metadata or a.root/'vision_ws/src/uav_vision/config/flight_5cls_20260928_metadata.yaml'
+    metadata=a.metadata or Path(os.environ.get('UAV_VISION_RKNN_METADATA_PATH',str(a.root/'vision_ws/src/uav_vision/config/flight_5cls_new_video_v8_20261011_metadata.yaml')))
     if not metadata.is_file():raise RuntimeError('Model metadata not found; use --metadata with matching weights')
     out=a.root/'logs'/('board_'+a.trial+'_'+time.strftime('%Y%m%d_%H%M%S'));out.mkdir(parents=True,exist_ok=False)
     if shutil.disk_usage(out).free<2*1024**3:raise RuntimeError('Less than 2GB recording space available')

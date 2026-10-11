@@ -9,6 +9,9 @@ waypoint_skipping_index: 0
 land_height: 0.30
 align_height: 1.60
 px4_max_distance: 0.20
+# 起飞专用 Z 领先距离（米），不是速度；0 回退旧通用 3D 限幅。
+# 0.6 为尚未实飞候选，不保证缩短起飞响应时间。
+takeoff_z_lead_m: 0.0
 max_yaw_change: 0.20
 
 # 外部 Mission Manager 的 H 降落配置。
@@ -62,16 +65,18 @@ motion_feedback:
   odom_topic: /mavros/local_position/odom
   twist_frame: child
 drop_system:
+  compensate_before_descent: true  # 冻结后先高位补偿，当前双XY到位即单向下降
   # 视觉确认并冻结靶心后，槽位补偿与下降并行；最终到位且低速稳定后才释放，不追残缺图像。
   slot_offset_semantics: body_flu_lever_arm
   compensated_alignment: true
   alignment_feedback_topic: /uav_vision/drop_alignment_feedback
   # 补偿投递只使用 xy_tolerance_m 和 max_odom_age_sec：当前到位即可调用原许可链。
-  # 高度使用 release_setpoint_height 至 height_threshold 的闭区间，不要求停稳。
+  # 高度使用 release_min_height 至 height_threshold 的闭区间，不要求停稳。
   # height_tolerance_m、两项速度、stable_duration_sec、max_sample_gap_sec、min_samples
   # 仅兼容保留，不参与补偿投递放行；调这些字段不能改变投递行为。H使用独立配置。
   settle:
-    xy_tolerance_m: 0.04  # FC及投口误差均严格小于4cm，首次当前到位即可
+    xy_tolerance_m: 0.06  # 标准大靶：FC及投口误差均严格小于6cm
+    red_cross_xy_tolerance_m: 0.04  # 红十字独立保持4cm，未知类别不放宽
     height_tolerance_m: 0.05
     max_horizontal_speed_mps: 0.05
     max_vertical_speed_mps: 0.10

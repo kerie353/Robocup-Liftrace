@@ -62,6 +62,12 @@ bool readNumber(const XmlRpc::XmlRpcValue& value, double* output) {
     return false;
 }
 
+// Metres of Z lookahead, not a velocity. Zero preserves the legacy 3-D path.
+double validatedTakeoffZLead(double requested) {
+    return std::isfinite(requested) && requested >= 0.4 && requested <= 0.6
+        ? requested : 0.0;
+}
+
 bool loadSlotOffsets(ros::NodeHandle& nh, const std::string& param_name,
                      std::array<std::array<double, 2>, 3>* offsets) {
     XmlRpc::XmlRpcValue value;
@@ -1677,7 +1683,15 @@ void LLController::cmdCallback(const ros::TimerEvent& event) {
     Eigen::Vector3d target_pos(mavros_point_cmd.pose.position.x, mavros_point_cmd.pose.position.y, mavros_point_cmd.pose.position.z);
     double distance_to_target = (target_pos - current_pos).norm();
     // 如果距离超过 px4_max_distance，则进行插值
-    if (distance_to_target > px4_max_distance &&
+    const double takeoff_lead = validatedTakeoffZLead(takeoff_z_lead_m_);
+    if (Drone_mode == Takeoff && takeoff_lead > 0.0 &&
+        std::isfinite(current_pos.z()) && std::isfinite(takeoff_point[2])) {
+        // Mutually exclusive with 3-D limiting: a 0.4 m general limit must
+        // not truncate the dedicated 0.6 m Z lookahead. Keep the final ceiling.
+        const double dz = static_cast<double>(takeoff_point[2]) - current_pos.z();
+        mavros_point_cmd.pose.position.z = current_pos.z() +
+            std::max(-takeoff_lead, std::min(takeoff_lead, dz));
+    } else if (distance_to_target > px4_max_distance &&
         !(external_mission_mode_ && Drone_mode == Run_point &&
           external_planner_height_hold_active_ && !external_planner_command_accepted)) {
         Eigen::Vector3d direction = (target_pos - current_pos).normalized();
@@ -1884,7 +1898,7 @@ void LLController::load_params() {
         cfg->min_samples = samples;
         if (!cfg->valid()) throw std::invalid_argument("invalid settlement configuration");
     };
-    drop_settle_config_.xy_tolerance_m = 0.04;
+    drop_settle_config_.xy_tolerance_m = 0.06;
     drop_settle_config_.height_tolerance_m = 0.05;
     drop_settle_config_.max_horizontal_speed_mps = 0.05;
     drop_settle_config_.max_vertical_speed_mps = 0.10;
@@ -1892,6 +1906,11 @@ void LLController::load_params() {
     // Drop uses only xy_tolerance_m and max_odom_age_sec. Other shared
     // config fields remain load-compatible, but do not gate compensated drop.
     load_stability("drop_system/settle", &drop_settle_config_);
+    drop_compensate_before_descent_ = nh_.param("drop_system/compensate_before_descent", true);
+    drop_red_cross_xy_tolerance_m_ = nh_.param(
+        "drop_system/settle/red_cross_xy_tolerance_m", 0.04);
+    if (!std::isfinite(drop_red_cross_xy_tolerance_m_) || drop_red_cross_xy_tolerance_m_ <= 0.0)
+        throw std::invalid_argument("invalid red cross drop XY tolerance");
     landing_settle_config_.max_horizontal_speed_mps = 0.08;
     landing_settle_config_.max_vertical_speed_mps = 0.10;
     landing_settle_config_.stable_duration_sec = 0.15;
@@ -1968,6 +1987,19 @@ void LLController::load_params() {
     // 参数
     land_height = nh_.param("land_height", 0.3);//降落时调整的固定高度
     px4_max_distance = nh_.param("px4_max_distance", 1.2);
+    {
+        XmlRpc::XmlRpcValue value;
+        double requested = 0.0;
+        const bool supplied = nh_.getParam("takeoff_z_lead_m", value);
+        const bool numeric = !supplied || readNumber(value, &requested);
+        takeoff_z_lead_m_ = numeric ? validatedTakeoffZLead(requested) : 0.0;
+        if (supplied && (!numeric || (requested != 0.0 && takeoff_z_lead_m_ == 0.0))) {
+            ROS_WARN("[Takeoff] invalid takeoff_z_lead_m; using legacy 3-D limit (0)");
+        }
+        ROS_INFO("[Takeoff] takeoff_z_lead_m=%.3f m (0=legacy 3-D); "
+                 "distance, not speed; flight candidate, no time-saving guarantee",
+                 takeoff_z_lead_m_);
+    }
     max_yaw_change = nh_.param("max_yaw_change", 0.3);
     align_height = nh_.param("align_height", 1.0);
     external_alignment_capture_height_ = align_height;
@@ -2800,7 +2832,8 @@ bool LLController::WayPointDetectDone()
             ROS_INFO("\033[32m[CrossDetectionDone]waypoint_temp: %.2f, %.2f\033[0m", waypoint_temp.pose.position.x, waypoint_temp.pose.position.y);
             adjust_target_position[0] = waypoint_temp.pose.position.x;
             adjust_target_position[1] = waypoint_temp.pose.position.y;
-            align_height = drop_release_setpoint_height_;
+            align_height = external_mission_mode_ && compensated_alignment_enabled_
+                ? compensatedDropCommandHeight() : drop_release_setpoint_height_;
             adjust_target_position[3] = tf::getYaw(waypoint_temp.pose.orientation);
             applyDropSlotOffset(servo_id, false);
             ROS_INFO("\033[32m[CrossDetectionDone] should_drop: %d, drop_complete: %d, uav_pose.pose.position.z: %.2f\033[0m", should_drop, drop_complete, uav_pose.pose.position.z);
@@ -3673,7 +3706,19 @@ bool LLController::setCompensatedDropTarget(geometry_msgs::PoseStamped* target) 
     return true;
 }
 
-bool LLController::compensatedDropSettled(bool release, double* error, double* speed) {
+double LLController::compensatedDropXYTolerance() const {
+    // Only the bound mission class may select the standard-board tolerance.
+    const auto& cls = compensated_context_.semantic_target_class;
+    if (cls == "tent" || cls == "pillbox" || cls == "bridge" || cls == "panzer")
+        return drop_settle_config_.xy_tolerance_m;
+    if (cls == "red_cross") return drop_red_cross_xy_tolerance_m_;
+    // Unsupported/unknown classes retain the old 4cm ceiling, even if the
+    // configurable red-cross tolerance is raised. A tighter setting still wins.
+    return std::min(0.04, drop_red_cross_xy_tolerance_m_);
+}
+
+bool LLController::compensatedDropSettled(bool release, double* error, double* speed,
+                                      bool require_release_height) {
     auto& window = release ? drop_release_window_ : drop_capture_window_;
     const auto& c = servo_alignment_context_;
     const auto& b = compensated_context_;
@@ -3715,19 +3760,44 @@ bool LLController::compensatedDropSettled(bool release, double* error, double* s
     // Frozen release uses the current fresh motion sample, without recapture
     // or another duration/sample-count window.
     if (!release) return externalLandingControlReady(ros::Time::now());
+    const double xy_tolerance = compensatedDropXYTolerance();
     const bool ready = std::isfinite(xy_error) && std::isfinite(horizontal_speed) &&
-        std::isfinite(pos.z) && xy_error < drop_settle_config_.xy_tolerance_m &&
-        pos.z >= drop_release_min_height_ && pos.z <= drop_height_threshold &&
+        std::isfinite(pos.z) && xy_error < xy_tolerance &&
+        (!require_release_height ||
+         (pos.z >= drop_release_min_height_ && pos.z <= drop_height_threshold)) &&
         externalLandingControlReady(ros::Time::now());
     if (!ready) ROS_INFO_THROTTLE(1.0,
-        "[DropGeometry] waiting: xy=%.3f speed=%.3f vz=%.3f fc_z=%.3f floor_z=%.3f ceiling_z=%.3f",
-        xy_error,horizontal_speed,velocity.z(),pos.z,drop_release_min_height_,drop_height_threshold);
-    else ROS_INFO(
+        "[DropGeometry] waiting: xy=%.3f speed=%.3f vz=%.3f fc_z=%.3f floor_z=%.3f ceiling_z=%.3f "
+        "xy_tolerance=%.3f class=%s",
+        xy_error,horizontal_speed,velocity.z(),pos.z,drop_release_min_height_,drop_height_threshold,
+        xy_tolerance,b.semantic_target_class.c_str());
+    else if (require_release_height) ROS_INFO(
         "[DropGeometry] release_ready slot=%u decision=%u fc_xy_error=%.4f outlet_xy_error=%.4f "
-        "horizontal_speed=%.4f vz=%.4f fc_z=%.4f floor_z=%.4f ceiling_z=%.4f odom=%.6f",
+        "horizontal_speed=%.4f vz=%.4f fc_z=%.4f floor_z=%.4f ceiling_z=%.4f odom=%.6f "
+        "xy_tolerance=%.3f class=%s",
         c.payload_slot,c.decision_seq,fc_error,outlet_error,horizontal_speed,velocity.z(),
-        pos.z,drop_release_min_height_,drop_height_threshold,motion_odom_.header.stamp.toSec());
+        pos.z,drop_release_min_height_,drop_height_threshold,motion_odom_.header.stamp.toSec(),
+        xy_tolerance,b.semantic_target_class.c_str());
     return ready;
+}
+
+double LLController::compensatedDropCommandHeight() {
+    // One-way within this action: later XY/feedback rejection blocks release,
+    // but must never command a climb back to visual capture height.
+    if (drop_descent_started_) return drop_release_setpoint_height_;
+    if (!compensated_goal_frozen_) return external_alignment_capture_height_;
+    if (!drop_compensate_before_descent_ ||
+        compensatedDropSettled(true, nullptr, nullptr, false)) {
+        drop_descent_started_ = true;
+        ROS_INFO("[DropGeometry] descent_started slot=%u decision=%u xy_tolerance=%.3f class=%s "
+                 "capture_z=%.4f release_z=%.4f serial=%s",
+                 compensated_context_.payload_slot, compensated_context_.decision_seq,
+                 compensatedDropXYTolerance(), compensated_context_.semantic_target_class.c_str(),
+                 external_alignment_capture_height_, drop_release_setpoint_height_,
+                 drop_compensate_before_descent_ ? "true" : "false");
+        return drop_release_setpoint_height_;
+    }
+    return external_alignment_capture_height_;
 }
 
 bool LLController::freezeCompensatedDropTarget() {
@@ -3736,12 +3806,15 @@ bool LLController::freezeCompensatedDropTarget() {
     const double age = (ros::Time::now()-latest_drop_ready_time_).toSec();
     if (!uav_drop_ready_ || age < 0.0 || age > drop_offset_timeout_) return false;
     compensated_goal_frozen_ = true;
+    drop_descent_started_ = false;
     drop_release_window_.reset();
     ROS_INFO("[DropGeometry] frozen slot=%u center=(%.3f,%.3f) FC=(%.3f,%.3f) source=%.6f "
-        "stage=enter_descend decision=%u capture_z=%.4f release_z=%.4f observed_fc_z=%.4f",
+        "stage=%s decision=%u capture_z=%.4f release_z=%.4f observed_fc_z=%.4f",
         compensated_context_.payload_slot, compensated_target_center_.x,compensated_target_center_.y,
         compensated_fc_goal_.pose.position.x,compensated_fc_goal_.pose.position.y,
-        compensated_observation_stamp_.toSec(),compensated_context_.decision_seq,
+        compensated_observation_stamp_.toSec(),
+        drop_compensate_before_descent_ ? "compensate_xy" : "enter_descend",
+        compensated_context_.decision_seq,
         external_alignment_capture_height_,drop_release_setpoint_height_,uav_pose.pose.position.z);
     return true;
 }
@@ -3860,6 +3933,8 @@ DropActionResult LLController::executeDropAction(int servo_id) {
         return servo_action_slot_ == servo_id ? servo_action_result_
                                              : DropActionResult::kRejected;
     }
+    if (external_mission_mode_ && compensated_alignment_enabled_ &&
+        drop_compensate_before_descent_ && !drop_descent_started_) return DropActionResult::kPending;
     if (external_mission_mode_ && compensated_alignment_enabled_ &&
         !compensatedDropSettled(true)) return DropActionResult::kPending;
     // Receiving a fresh release permission is not permission to actuate after
@@ -4014,6 +4089,7 @@ void LLController::stopDropAction(int servo_id) {
 void LLController::resetDropState() {
     compensated_target_outside_boundary_ = false;
     compensated_goal_valid_ = compensated_goal_frozen_ = false;
+    drop_descent_started_ = false;
     compensated_observation_stamp_ = ros::Time(0);
     drop_capture_window_.reset();
     drop_release_window_.reset();
@@ -4181,7 +4257,8 @@ bool LLController::CrossDetectionDone() {
             ROS_INFO("\033[32m[CrossDetectionDone]waypoint_temp: %.2f, %.2f\033[0m", waypoint_temp.pose.position.x, waypoint_temp.pose.position.y);
             adjust_target_position[0] = waypoint_temp.pose.position.x;
             adjust_target_position[1] = waypoint_temp.pose.position.y;
-            align_height = drop_release_setpoint_height_;
+            align_height = external_mission_mode_ && compensated_alignment_enabled_
+                ? compensatedDropCommandHeight() : drop_release_setpoint_height_;
             adjust_target_position[3] = tf::getYaw(waypoint_temp.pose.orientation);
             applyDropSlotOffset(servo_id, true);
             double ttt = distance3d(
@@ -4285,6 +4362,7 @@ void LLController::resetCrossDetectionState() {
 void LLController::resetDetectionState() {
     compensated_target_outside_boundary_ = false;
     compensated_goal_valid_ = compensated_goal_frozen_ = false;
+    drop_descent_started_ = false;
     compensated_observation_stamp_ = ros::Time(0);
     drop_capture_window_.reset();
     drop_release_window_.reset();

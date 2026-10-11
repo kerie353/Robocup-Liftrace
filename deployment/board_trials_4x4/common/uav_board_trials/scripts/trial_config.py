@@ -81,6 +81,9 @@ def flight_geometry(settings):
 
 def validate_settings(settings):
     release_heights(settings)
+    lead=settings.get('takeoff_z_lead_m',0.)
+    if isinstance(lead,bool) or not isinstance(lead,(int,float)) or not math.isfinite(lead) or not (lead==0 or .4<=lead<=.6):
+        raise ValueError('takeoff_z_lead_m must be 0 or [0.4, 0.6] metres')
     budget=settings.get('motion_action_timeout',30.)
     if isinstance(budget,bool) or not isinstance(budget,(int,float)) or not math.isfinite(budget) or not 0<budget<=600:
         raise ValueError('Invalid motion_action_timeout; expected seconds in (0,600]')
@@ -239,7 +242,7 @@ def generate(root,out,settings,fc_xyz,rig):
     tx0,tx1,ty0,ty1=area['target_bounds'];target_bounds=[x+tx0,x+tx1,y+ty0,y+ty1]
     runtime['high_view_probe']=dict(config=dict(ground_z=ground,high_agl=settings['high_agl'],low_agl=settings['low_agl'],staging_xy=[x+area['staging_xy'][0],y+area['staging_xy'][1]],survey_xy=[point(a,b,0)[:2] for a,b in area['survey_xy']],source_key='board-inherited-camera-static-start'),camera_info_topic=settings.get('camera_info_topic','/camera/camera_info'))
     runtime['high_view_probe']['low_stage_parameters']=[dict(name=key,value=value) for key,value in {'/external_planner_max_command_z':max(ground+1.85,capture+.1) if h_landing else ground+1.85,'/fast_planner_node/sdf_map/virtual_ceil_height':(ground+2. if ceiling_enabled else -.1),'/fast_planner_node/fsm/goal_adjustment_radius':.15}.items()]
-    runtime['high_view_full']=dict(policy=dict(high_min_agl=max(1.8,settings['high_agl']-.2),high_max_agl=settings['high_agl']+.2,coarse_enabled=True,coarse_min_confidence=.60,coarse_interrupt_min_interval_ns=100000000,coarse_interrupt_max_gap_ns=1000000000,coarse_interrupt_consistency_m=.5,interrupt_refined_classes=[],recheck_observe_seconds=5.,recheck_shift_after_seconds=1.,recheck_shift_radius_m=.5,candidate_min_streak=1,min_interval_ns=100000000,min_span_ns=200000000,max_uncertainty_m=.45,direct_descent=True,descent_radius_m=1.,descent_max_candidates=9,survey_stall_seconds=8.,survey_progress_m=.15,survey_alternative_radius_m=.3),grid=dict(bounds=bounds,resolution=.10,inflation=.25),boundary_policy=dict(enabled=True,bounds=target_bounds))
+    runtime['high_view_full']=dict(policy=dict(high_min_agl=max(1.8,settings['high_agl']-.2),high_max_agl=settings['high_agl']+.2,coarse_enabled=True,coarse_min_confidence=.75,coarse_interrupt_min_interval_ns=100000000,coarse_interrupt_max_gap_ns=1000000000,coarse_interrupt_consistency_m=.5,interrupt_refined_classes=[],recheck_observe_seconds=5.,recheck_shift_after_seconds=1.,recheck_shift_radius_m=.5,candidate_min_streak=1,min_interval_ns=100000000,min_span_ns=200000000,max_uncertainty_m=.45,direct_descent=True,descent_radius_m=1.,descent_max_candidates=9,survey_stall_seconds=8.,survey_progress_m=.15,survey_alternative_radius_m=.3),grid=dict(bounds=bounds,resolution=.10,inflation=.25),boundary_policy=dict(enabled=True,bounds=target_bounds))
     resume_enabled=settings.get('resume_survey_enabled',False)
     if type(resume_enabled) is not bool:
         raise ValueError('resume_survey_enabled must be boolean')
@@ -253,6 +256,7 @@ def generate(root,out,settings,fc_xyz,rig):
         SurveyPolicy(**runtime['high_view_full']['policy'])
     control=yaml.safe_load((root/'patrol_uav_ws-patrol_planner/src/uav_mission/config/vcl06_horizontal_control.yaml').read_text())
     control.update(waypoints=[dict(x=x,y=y,z=(ground+settings['landing_transit_agl'] if mode=='landing' else low),yaw=0.,pointmode='Takeoff_point',hover_time=0.)],align_height=low,land_height=land_z,px4_max_distance=.25)
+    control['takeoff_z_lead_m']=float(settings.get('takeoff_z_lead_m',0.))
     control['switch']['auto_land']=h_landing;control['drop_system'].update(enable_drop=drop_enabled,
         release_setpoint_height=drop,release_min_height=ground+release_min,height_threshold=ground+release_max)
     control['switch']['flag_landing_detect']=1 if h_landing else 0
@@ -299,7 +303,7 @@ def generate(root,out,settings,fc_xyz,rig):
         '/board_trials/ground_z':ground,'/board_trials/fc_on_ground_z':z,'/board_trials/mock_only':actuator=='mock',
         '/board_trials/actuator_mode':actuator,
         '/target_map_projector/coarse_navigation_enabled':high_mode,
-        '/target_map_projector/coarse_min_confidence':.60,
+        '/target_map_projector/coarse_min_confidence':.75,
         # Loaded after Phase D's detector YAML in the common application launch.
         # Standalone H, corridor+H and full-mission LAND use the same fallback.
         '/landing_detector/landing_enable_h_stroke_fallback':h_landing,
@@ -317,6 +321,7 @@ def generate(root,out,settings,fc_xyz,rig):
         control['px4_max_distance']=.4
     # application.launch loads overrides last, after the parent controller's defaults.
     overrides['/px4_max_distance']=control['px4_max_distance']
+    overrides['/takeoff_z_lead_m']=control['takeoff_z_lead_m']
     from uav_mission.navigation_recovery_config import recovery_parameters
     # Trials declare recovery off explicitly, including residual ROS-master parameters.
     overrides.update(recovery_parameters({},ground))

@@ -122,12 +122,14 @@ private:
     std::string motion_odom_topic_, motion_twist_frame_, compensated_alignment_topic_;
     bool compensated_alignment_enabled_ = true;
     bool compensated_goal_valid_ = false, compensated_goal_frozen_ = false;
+    bool drop_compensate_before_descent_ = true, drop_descent_started_ = false;
     bool compensated_target_outside_boundary_ = false;
     geometry_msgs::PoseStamped compensated_fc_goal_;
     geometry_msgs::Point compensated_target_center_;
     uav_vision::AlignmentTargetContext compensated_context_;
     ros::Time compensated_observation_stamp_;
     LandingHandoffStabilityConfig drop_settle_config_, landing_settle_config_, landing_capture_config_;
+    double drop_red_cross_xy_tolerance_m_ = 0.04;
     LandingHandoffStabilityWindow drop_capture_window_, drop_release_window_;
     LandingHandoffStabilityWindow landing_capture_window_, landing_handoff_window_;
     void motionOdomCallback(const nav_msgs::Odometry::ConstPtr& msg);
@@ -136,8 +138,10 @@ private:
     bool freshMotion(Eigen::Vector3d* velocity, Eigen::Vector3d* angular,
                      const char** rejection = nullptr) const;
     bool setCompensatedDropTarget(geometry_msgs::PoseStamped* target);
+    double compensatedDropXYTolerance() const;
     bool compensatedDropSettled(bool release, double* error = nullptr,
-                                double* speed = nullptr);
+                                double* speed = nullptr, bool require_release_height = true);
+    double compensatedDropCommandHeight();
     void publishCompensatedAlignment();
     bool freezeCompensatedDropTarget();
     bool landingMotionSettled(bool handoff, double xy_error);
@@ -245,6 +249,7 @@ private:
 
     float land_height = 0.3;
     float px4_max_distance = 1.2;
+    double takeoff_z_lead_m_ = 0.0;  // Opt-in [0.4, 0.6] m; zero is legacy.
     float max_yaw_change = 0.2;
 
     int waypoint_next = 0;

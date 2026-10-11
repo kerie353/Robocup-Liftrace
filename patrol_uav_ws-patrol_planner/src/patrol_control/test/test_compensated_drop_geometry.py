@@ -131,6 +131,8 @@ class LLController {
 public:
  bool external_mission_mode_=true,compensated_alignment_enabled_=true;
  bool compensated_goal_valid_=false,compensated_goal_frozen_=false;
+ bool drop_compensate_before_descent_=true,drop_descent_started_=false;
+ void loadDropSequenceConfig(){SERIAL_PARAMETERS}
  bool compensated_target_outside_boundary_=false,guard_proceeded=false;
  NearWallAlignFence near_wall_align_fence_;
  struct { uav_vision::DropAlignmentFeedback last; void publish(const uav_vision::DropAlignmentFeedback& m){last=m;} } compensated_alignment_pub_;
@@ -153,6 +155,8 @@ public:
   double param(const std::string& key,double fallback){auto it=values.find(key);return it==values.end()?fallback:it->second;}
  } nh_;
  void loadReleaseHeights(){RELEASE_HEIGHT_PARAMETERS}
+ double drop_red_cross_xy_tolerance_m_=.04;
+ void loadRedCrossXYTolerance(){RED_CROSS_PARAMETERS}
  double drop_height_threshold=.45,align_height=1;
  bool uav_drop_ready_=true,control_ready=true,permission_ready=true,should_drop=false;
  double drop_position_threshold_=.15; bool require_vision_release_permission_=true;
@@ -189,6 +193,8 @@ public:
  int times_detect=0,count_aligning=0;std::string latest_drop_ready_reason_;
  LLController(){
   DEFAULTS
+  loadRedCrossXYTolerance();
+  loadDropSequenceConfig();
   drop_capture_window_=LandingHandoffStabilityWindow(drop_settle_config_);
   drop_release_window_=LandingHandoffStabilityWindow(drop_settle_config_);
   servo_alignment_context_.header.stamp=ros::Time::now();
@@ -199,7 +205,9 @@ public:
  bool motionTimePending() const;
  bool freshMotion(Eigen::Vector3d*,Eigen::Vector3d*,const char** =nullptr)const;
  bool setCompensatedDropTarget(geometry_msgs::PoseStamped*);
- bool compensatedDropSettled(bool,double* =nullptr,double* =nullptr);
+ double compensatedDropXYTolerance() const;
+ bool compensatedDropSettled(bool,double* =nullptr,double* =nullptr,bool=true);
+ double compensatedDropCommandHeight();
  bool freezeCompensatedDropTarget();
  void publishCompensatedAlignment();
  void advanceExternalGuard(){ EXTERNAL_GUARD guard_proceeded=true; }
@@ -234,7 +242,9 @@ void odom(LLController&c,double t,double x,double y,double z,double vx=0,double 
 geometry_msgs::PoseStamped center(double t){
  geometry_msgs::PoseStamped p;p.header.stamp=ros::Time(t);p.pose.position={2,3,1};return p;
 }
+bool serial_test=false;
 void capture(LLController&c){
+ if(!serial_test)c.drop_compensate_before_descent_=false; // Isolate the pre-existing release tests in explicit compatibility mode.
  odom(c,100,2,3,1);auto p=center(100);assert(c.setCompensatedDropTarget(&p));
  const auto g=c.compensated_fc_goal_.pose.position;
  // Reliable visual capture is already ready; full 12cm correction may
@@ -252,8 +262,153 @@ void finish(LLController&c,const std::shared_ptr<Transport>&t){
 }
 int main(int argc,char**argv){
  assert(argc==2);const std::string name=argv[1];ros::clock_sec=100;
- LLController c;auto t=std::make_shared<Transport>();c.servo_client.impl=c.servo_action_client_.impl=t;
- if(name=="arms"){
+ serial_test=name.find("serial_")==0;
+ LLController c;if(!serial_test)c.drop_compensate_before_descent_=false;
+ auto t=std::make_shared<Transport>();c.servo_client.impl=c.servo_action_client_.impl=t;
+ if(name=="serial_sequence"){
+  for(const std::string cls:{"pillbox","red_cross"}){
+   ros::clock_sec=100;LLController d;auto transport=std::make_shared<Transport>();
+   d.servo_client.impl=d.servo_action_client_.impl=transport;
+   const bool cross=cls=="red_cross";d.current_align_mode_=cross?"drop_cross":"drop_circle";
+   d.servo_alignment_context_.align_mode=d.current_align_mode_;
+   d.servo_alignment_context_.semantic_target_class=cls;d.servo_alignment_target_class_=cls;
+   odom(d,100,2,3,1,.5);auto p=center(100);assert(d.setCompensatedDropTarget(&p));
+   d.waypoint_mark_point=d.cross_mark_point=p;d.have_waypoint_mark=!cross;d.have_cross_mark=cross;
+   auto tick=[&]{if(cross)d.advanceCross();else d.advanceCircle();};tick();
+   assert(d.compensated_goal_frozen_&&!d.drop_descent_started_);close(d.align_height,1);
+   const auto g=d.compensated_fc_goal_.pose.position,original=g;
+   // Freeze no longer needs continuing visual ready or a fresh source image.
+   d.uav_drop_ready_=false;d.have_waypoint_mark=d.have_cross_mark=false;
+   d.drop_settle_config_.stable_duration_sec=100;d.drop_settle_config_.min_samples=1000;
+   odom(d,101,g.x+.05,g.y,1,.8);d.motion_odom_.twist.twist.linear.z=.5;tick();
+   assert(d.drop_descent_started_==!cross);close(d.align_height,cross?1:.40);
+   if(cross){odom(d,101.01,g.x+.039,g.y,1,.8);tick();}
+   assert(d.drop_descent_started_);close(d.align_height,.40);
+   // Descent phase latches, but release readiness never latches.
+   odom(d,102,g.x+.07,g.y,.40);tick();close(d.align_height,.40);
+   assert(!d.compensatedDropSettled(true));
+   assert(d.executeDropAction(1)==DropActionResult::kPending&&!d.servo_action_attempted_);
+   odom(d,102.01,g.x,g.y,.46);tick();close(d.align_height,.40);assert(!d.compensatedDropSettled(true));
+   odom(d,102.02,g.x,g.y,.40);d.permission_ready=false;tick();
+   assert(!(cross?d.crossReleaseReady():d.circleReleaseReady()));
+   assert(d.executeDropAction(1)==DropActionResult::kRejected&&transport->calls==0);
+   d.permission_ready=true;assert(d.executeDropAction(1)==DropActionResult::kPending&&d.servo_action_attempted_);
+   finish(d,transport);assert(transport->calls==1);
+   close(d.compensated_fc_goal_.pose.position.x,original.x);close(d.compensated_fc_goal_.pose.position.y,original.y);
+  }
+ }else if(name=="serial_admission"){
+  capture(c);const auto g=c.compensated_fc_goal_.pose.position;
+  // Initial/current height already lies in the release window and permission is valid.
+  odom(c,101,g.x,g.y,.40);assert(c.compensatedDropSettled(true));
+  assert(!c.drop_descent_started_);
+  assert(c.executeDropAction(1)==DropActionResult::kPending&&!c.servo_action_attempted_&&t->calls==0);
+  close(c.compensatedDropCommandHeight(),.40);assert(c.drop_descent_started_);
+  assert(c.executeDropAction(1)==DropActionResult::kPending&&c.servo_action_attempted_);
+  finish(c,t);assert(t->calls==1);
+ }else if(name=="serial_invalid"){
+  for(int reason=0;reason<6;++reason){
+   ros::clock_sec=100;LLController d;capture(d);const auto g=d.compensated_fc_goal_.pose.position;
+   odom(d,101,g.x,g.y,1);
+   if(reason==0)d.servo_alignment_context_.mission_id="other";
+   if(reason==1)d.servo_alignment_context_.deadline=ros::Time(100.5);
+   if(reason==2)d.control_ready=false;
+   if(reason==3){ros::clock_sec=101.3;d.uav_pose.header.stamp=ros::Time::now();}
+   if(reason==4){auto cancelled=std::make_shared<uav_vision::AlignmentTargetContext>(d.servo_alignment_context_);
+    cancelled->active=false;d.servoAlignmentContextCallback(cancelled);}
+   if(reason==5)d.servo_alignment_context_.semantic_target_class="red_cross";
+   close(d.compensatedDropCommandHeight(),1);assert(!d.drop_descent_started_);
+   assert(!d.compensatedDropSettled(true));
+  }
+ }else if(name=="serial_cancel_after_descent"){
+  capture(c);const auto g=c.compensated_fc_goal_.pose.position;odom(c,101,g.x,g.y,1);
+  close(c.compensatedDropCommandHeight(),.40);odom(c,102,g.x,g.y,.6);
+  auto cancelled=std::make_shared<uav_vision::AlignmentTargetContext>(c.servo_alignment_context_);
+  cancelled->active=false;c.servoAlignmentContextCallback(cancelled);
+  c.advanceExternalGuard();assert(!c.guard_proceeded);close(c.align_height,.6);
+  assert(c.drop_descent_started_&&!c.compensatedDropSettled(true));
+  assert(c.executeDropAction(1)==DropActionResult::kPending&&!c.servo_action_attempted_&&t->calls==0);
+ }else if(name=="serial_reset"){
+  for(bool detection:{false,true}){
+   ros::clock_sec=100;LLController d;capture(d);auto g=d.compensated_fc_goal_.pose.position;
+   odom(d,101,g.x,g.y,1);close(d.compensatedDropCommandHeight(),.40);
+   if(detection)d.resetDetectionState();else d.resetDropState();
+   assert(!d.drop_descent_started_&&!d.compensated_goal_frozen_);
+   d.servo_alignment_context_.mission_id="new_action";d.servo_alignment_context_.decision_seq=10;
+   d.servo_alignment_decision_seq_=10;d.servo_alignment_context_.semantic_target_first_seen=ros::Time(95);
+   d.servo_alignment_context_.header.stamp=ros::Time(102);
+   odom(d,102,2,3,1);auto next=center(102);assert(d.setCompensatedDropTarget(&next));
+   d.uav_drop_ready_=true;d.latest_drop_ready_time_=ros::Time(102);
+   assert(d.freezeCompensatedDropTarget());close(d.compensatedDropCommandHeight(),1);
+   assert(!d.drop_descent_started_);
+  }
+ }else if(name=="serial_config"){
+  assert(c.drop_compensate_before_descent_);
+  c.nh_.values["drop_system/compensate_before_descent"]=0;c.loadDropSequenceConfig();
+  assert(!c.drop_compensate_before_descent_);capture(c);
+  close(c.compensatedDropCommandHeight(),.40);assert(c.drop_descent_started_);
+ }else if(name=="serial_outlet"){
+  capture(c);const auto g=c.compensated_fc_goal_.pose.position;
+  odom(c,101,g.x,g.y,1,0,0,attitude(std::acos(-1)/2));
+  close(c.compensatedDropCommandHeight(),1);assert(!c.drop_descent_started_);
+  odom(c,101.01,g.x,g.y,1);close(c.compensatedDropCommandHeight(),.40);
+  assert(c.drop_descent_started_);ros::clock_sec=102;
+  close(c.compensatedDropCommandHeight(),.40);assert(!c.compensatedDropSettled(true));
+ }else if(name=="class_thresholds"){
+  for(const std::string cls:{"tent","pillbox","bridge","panzer","red_cross","","circle","tank","PILLBOX"}){
+   ros::clock_sec=100;LLController d;d.servo_alignment_context_.semantic_target_class=cls;
+   d.servo_alignment_target_class_=cls;capture(d);const auto g=d.compensated_fc_goal_.pose.position;
+   const bool standard=cls=="tent"||cls=="pillbox"||cls=="bridge"||cls=="panzer";
+   odom(d,101,g.x+.05,g.y,.40,.5);assert(d.compensatedDropSettled(true)==standard);
+   odom(d,101.01,g.x+.039,g.y,.40);assert(d.compensatedDropSettled(true));
+   odom(d,101.02,g.x+.061,g.y,.40);assert(!d.compensatedDropSettled(true));
+  }
+ }else if(name=="class_mode"){
+  for(const std::string cls:{"panzer","red_cross"})for(const std::string mode:{"drop_circle","drop_cross"}){
+   ros::clock_sec=100;LLController d;d.servo_alignment_context_.semantic_target_class=cls;
+   d.servo_alignment_target_class_=cls;d.servo_alignment_context_.align_mode=mode;d.current_align_mode_=mode;
+   capture(d);const auto g=d.compensated_fc_goal_.pose.position;odom(d,101,g.x+.05,g.y,.40);
+   assert(d.compensatedDropSettled(true)==(cls=="panzer"));
+  }
+ }else if(name=="class_binding"){
+  c.servo_alignment_context_.semantic_target_class="red_cross";c.servo_alignment_target_class_="red_cross";
+  capture(c);const auto g=c.compensated_fc_goal_.pose.position;odom(c,101,g.x+.05,g.y,.40);
+  assert(!c.compensatedDropSettled(true));
+  c.servo_alignment_context_.semantic_target_class="panzer";
+  assert(!c.compensatedDropSettled(true)); // Changed live class cannot loosen frozen transaction.
+ }else if(name=="class_parameters"){
+  c.nh_.values["drop_system/settle/red_cross_xy_tolerance_m"]=.03;c.loadRedCrossXYTolerance();
+  c.servo_alignment_context_.semantic_target_class="red_cross";c.servo_alignment_target_class_="red_cross";
+  capture(c);const auto g=c.compensated_fc_goal_.pose.position;
+  odom(c,101,g.x+.035,g.y,.40);assert(!c.compensatedDropSettled(true));
+  odom(c,101.01,g.x+.025,g.y,.40);assert(c.compensatedDropSettled(true));
+  c.compensated_context_.semantic_target_class="tank";
+  c.drop_red_cross_xy_tolerance_m_=.08;close(c.compensatedDropXYTolerance(),.04);
+  c.drop_red_cross_xy_tolerance_m_=.03;close(c.compensatedDropXYTolerance(),.03);
+ }else if(name=="red_parameters_invalid"){
+  c.loadRedCrossXYTolerance();close(c.drop_red_cross_xy_tolerance_m_,.04);
+  for(double value:{0.,-.01,std::numeric_limits<double>::quiet_NaN(),std::numeric_limits<double>::infinity()}){
+   c.nh_.values["drop_system/settle/red_cross_xy_tolerance_m"]=value;
+   bool threw=false;try{c.loadRedCrossXYTolerance();}catch(const std::invalid_argument&){threw=true;}assert(threw);
+  }
+ }else if(name=="class_boundary"){
+  for(const std::string cls:{"panzer","red_cross"}){
+   ros::clock_sec=100;LLController d;d.servo_alignment_context_.semantic_target_class=cls;
+   d.servo_alignment_target_class_=cls;capture(d);const auto g=d.compensated_fc_goal_.pose.position;
+   odom(d,101,g.x+(cls=="panzer"?.06:.04),g.y,.40);double error=0;d.compensatedDropSettled(true,&error);
+   if(cls=="panzer")d.drop_settle_config_.xy_tolerance_m=error;else d.drop_red_cross_xy_tolerance_m_=error;
+   assert(!d.compensatedDropSettled(true)); // Exact equality is always refused.
+  }
+ }else if(name=="class_rpc"){
+  for(const std::string cls:{"pillbox","red_cross"}){
+   ros::clock_sec=100;LLController d;auto transport=std::make_shared<Transport>();
+   d.servo_client.impl=d.servo_action_client_.impl=transport;
+   d.servo_alignment_context_.semantic_target_class=cls;d.servo_alignment_target_class_=cls;
+   capture(d);const auto g=d.compensated_fc_goal_.pose.position;odom(d,101,g.x+.05,g.y,.40,.5);
+   assert(d.executeDropAction(1)==DropActionResult::kPending);
+   assert(d.servo_action_attempted_==(cls=="pillbox"));
+   if(cls=="pillbox")finish(d,transport);else assert(transport->calls==0);
+  }
+ }else if(name=="arms"){
   const double pi=std::acos(-1),tilt=7.39*pi/180;
   for(const std::string mode:{"drop_circle","drop_cross"})for(int slot=1;slot<=3;++slot)
    for(double yaw:{0.,pi/2,-pi/2})for(double pitch:{0.,tilt,-tilt}){
@@ -332,6 +487,7 @@ int main(int argc,char**argv){
   close(c.compensated_target_center_.x,2);
   assert(c.executeDropAction(1)==DropActionResult::kPending&&!c.servo_action_attempted_&&t->calls==0);
  }else if(name=="circle_descent" || name=="cross_descent"){
+  c.drop_compensate_before_descent_=false; // Explicit compatibility mode keeps simultaneous descent.
   const bool cross=name=="cross_descent";c.current_align_mode_=cross?"drop_cross":"drop_circle";
   c.servo_alignment_context_.align_mode=c.current_align_mode_;
   odom(c,100,2,3,1,.12);auto p=center(100);assert(c.setCompensatedDropTarget(&p));
@@ -391,7 +547,7 @@ int main(int argc,char**argv){
    finish(c,t);assert(t->calls==1);
    assert(!outer()); // Original !drop_complete still prevents a second request.
   }else{
-   odom(c,101.01,g.x+.041,g.y,.40);assert(!outer());
+   odom(c,101.01,g.x+.061,g.y,.40);assert(!outer());
    odom(c,101.02,g.x,g.y,.451);assert(!outer());
    odom(c,101.03,g.x,g.y,.349);assert(!outer());
    odom(c,101.04,g.x,g.y,.45);assert(outer());
@@ -436,11 +592,11 @@ int main(int argc,char**argv){
    capture(c);const auto g=c.compensated_fc_goal_.pose.position;
    CONFIGURED_DROP
    c.drop_release_window_=LandingHandoffStabilityWindow(c.drop_settle_config_);
-   close(c.drop_settle_config_.xy_tolerance_m,.04);
-   for(int i=0;i<3;++i){odom(c,101+i*.15625,g.x+.041,g.y,.35,.07);
+   close(c.drop_settle_config_.xy_tolerance_m,.06);
+   for(int i=0;i<3;++i){odom(c,101+i*.15625,g.x+.061,g.y,.35,.07);
     assert(c.executeDropAction(1)==DropActionResult::kPending&&!c.servo_action_attempted_&&t->calls==0);}
    // A single current sample is enough after the original visual capture.
-   odom(c,103,g.x+.035,g.y,.35,.20);
+   odom(c,103,g.x+.055,g.y,.35,.20);
    assert(c.executeDropAction(1)==DropActionResult::kPending&&c.servo_action_attempted_);
    finish(c,t);assert(c.executeDropAction(1)==DropActionResult::kSuccess&&t->calls==1);
   }else if(name=="height_config_compat"){
@@ -469,18 +625,18 @@ int main(int argc,char**argv){
    CONFIGURED_DROP
    odom(c,101,g.x,g.y,.40,.08);
    assert(c.compensatedDropSettled(true));
-   odom(c,101.01,g.x+.039,g.y,.40);
+   odom(c,101.01,g.x+.059,g.y,.40);
    assert(c.compensatedDropSettled(true));
-   odom(c,101.02,g.x+.041,g.y,.40);
+   odom(c,101.02,g.x+.061,g.y,.40);
    assert(!c.compensatedDropSettled(true));
    // Equality must not pass; use the measured error as the exact threshold.
    double measured=0;
    c.compensatedDropSettled(true,&measured);
    c.drop_settle_config_.xy_tolerance_m=measured;
    assert(!c.compensatedDropSettled(true));
-   c.drop_settle_config_.xy_tolerance_m=.04;
+   c.drop_settle_config_.xy_tolerance_m=.06;
    // Earlier height-only and later position-only satisfaction cannot latch.
-   odom(c,101.021,g.x+.05,g.y,.40);assert(!c.compensatedDropSettled(true));
+   odom(c,101.021,g.x+.07,g.y,.40);assert(!c.compensatedDropSettled(true));
    odom(c,101.022,g.x,g.y,.46);assert(!c.compensatedDropSettled(true));
    odom(c,101.03,g.x,g.y,.40,.081);
    assert(c.compensatedDropSettled(true));
@@ -520,14 +676,14 @@ int main(int argc,char**argv){
    assert(c.executeDropAction(1)==DropActionResult::kPending&&!c.servo_action_attempted_&&t->calls==0);
   }else if(name=="xy"||name=="speed"||name=="angular"){
   capture(c);const auto g=c.compensated_fc_goal_.pose.position;
-  for(int i=0;i<5;++i){odom(c,101+i*.15625,g.x+(name=="xy"?.06:0),g.y,.35,
+  for(int i=0;i<5;++i){odom(c,101+i*.15625,g.x+(name=="xy"?.061:0),g.y,.35,
     name=="speed"?.051:0,0,geometry_msgs::Quaternion(),name=="angular"?.5:0);
    assert(c.executeDropAction(1)==DropActionResult::kPending);
    assert(c.servo_action_attempted_==(name!="xy"));}
   if(name!="xy")finish(c,t);
  }else if(name=="samples"||name=="async"){
   capture(c);const auto g=c.compensated_fc_goal_.pose.position;
-  close(c.drop_settle_config_.xy_tolerance_m,.04);close(c.drop_settle_config_.max_horizontal_speed_mps,.05);
+  close(c.drop_settle_config_.xy_tolerance_m,.06);close(c.drop_settle_config_.max_horizontal_speed_mps,.05);
   close(c.drop_settle_config_.stable_duration_sec,.3);assert(c.drop_settle_config_.min_samples==3);
   for(int i=0;i<3;++i){odom(c,101+i*.15625,g.x,g.y,.35);
    assert(c.executeDropAction(1)==DropActionResult::kPending);assert(c.servo_action_attempted_);}
@@ -643,7 +799,9 @@ class CompensatedDropGeometryTests(unittest.TestCase):
             'bool LLController::motionTimePending(',
             'bool LLController::freshMotion(',
             'bool LLController::setCompensatedDropTarget(',
+            'double LLController::compensatedDropXYTolerance(',
             'bool LLController::compensatedDropSettled(',
+            'double LLController::compensatedDropCommandHeight(',
             'bool LLController::freezeCompensatedDropTarget(',
             'void LLController::publishCompensatedAlignment(',
             'void LLController::applyDropSlotOffset(',
@@ -661,6 +819,11 @@ class CompensatedDropGeometryTests(unittest.TestCase):
         start = source.index('    drop_settle_config_.xy_tolerance_m =')
         end = source.index('    load_stability(', start)
         defaults = source[start:end]
+        red_start = source.index('    drop_red_cross_xy_tolerance_m_ = nh_.param(')
+        red_end = source.index('    landing_settle_config_.max_horizontal_speed_mps', red_start)
+        red_parameters = source[red_start:red_end]
+        serial_start = source.index('    drop_compensate_before_descent_ = nh_.param(')
+        serial_parameters = source[serial_start:red_start]
         height_start = source.index('    drop_release_setpoint_height_ = nh_.param(')
         height_end = source.index('    drop_enabled =', height_start)
         height_parameters = source[height_start:height_end]
@@ -670,7 +833,8 @@ class CompensatedDropGeometryTests(unittest.TestCase):
         if configured != trial:
             raise AssertionError('formal and trial drop settlement must agree')
         configured_assignments = '\n'.join(
-            f'c.drop_settle_config_.{key} = {value};' for key, value in configured.items())
+            (f'c.drop_red_cross_xy_tolerance_m_ = {value};' if key == 'red_cross_xy_tolerance_m'
+             else f'c.drop_settle_config_.{key} = {value};') for key, value in configured.items())
         cls.folder = tempfile.TemporaryDirectory(prefix='compensated-drop-')
         cls.addClassCleanup(cls.folder.cleanup)
         root = Path(cls.folder.name)
@@ -690,6 +854,8 @@ class CompensatedDropGeometryTests(unittest.TestCase):
         guard_end = source.index('    std_msgs::Bool detect_enable_msg;', guard_start)
         cpp.write_text(PROGRAM.replace('METHODS', production).replace('DEFAULTS', defaults)
                        .replace('RELEASE_HEIGHT_PARAMETERS', height_parameters)
+                       .replace('RED_CROSS_PARAMETERS', red_parameters)
+                       .replace('SERIAL_PARAMETERS', serial_parameters)
                        .replace('CONFIGURED_DROP', configured_assignments)
                        .replace('EXTERNAL_GUARD', source[guard_start:guard_end])
                        .replace('CIRCLE_RELEASE', outer_release('bool LLController::WayPointDetectDone('))
@@ -706,6 +872,20 @@ class CompensatedDropGeometryTests(unittest.TestCase):
         result = subprocess.run([str(self.binary), name], capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_serial_circle_and_cross_hold_then_descend_once_without_visual_or_speed_wait(self): self.run_case('serial_sequence')
+    def test_serial_service_requires_descent_entry_even_if_initial_height_is_in_window(self): self.run_case('serial_admission')
+    def test_invalid_context_cancel_expired_motion_and_control_block_descent_entry(self): self.run_case('serial_invalid')
+    def test_cancel_after_descent_uses_existing_hold_guard_and_never_releases(self): self.run_case('serial_cancel_after_descent')
+    def test_new_action_resets_descent_phase_via_both_existing_reset_paths(self): self.run_case('serial_reset')
+    def test_serial_default_and_explicit_compatibility_parameter(self): self.run_case('serial_config')
+    def test_serial_entry_checks_actual_outlet_and_later_stale_motion_does_not_climb(self): self.run_case('serial_outlet')
+    def test_bound_standard_red_cross_and_unknown_class_thresholds(self): self.run_case('class_thresholds')
+    def test_semantic_class_not_geometry_mode_selects_threshold(self): self.run_case('class_mode')
+    def test_live_class_change_cannot_loosen_frozen_transaction(self): self.run_case('class_binding')
+    def test_red_cross_parameter_is_independent_and_unknown_remains_capped(self): self.run_case('class_parameters')
+    def test_red_cross_default_and_invalid_parameter_values(self): self.run_case('red_parameters_invalid')
+    def test_standard_and_red_cross_exact_threshold_equality_rejected(self): self.run_case('class_boundary')
+    def test_five_cm_standard_admits_rpc_but_red_cross_never_calls(self): self.run_case('class_rpc')
     def test_three_physical_arms_yaw_and_tilt_without_accumulation(self): self.run_case('arms')
     def test_outside_endpoint_holds_reports_and_cannot_freeze_or_release(self): self.run_case('boundary')
     def test_endpoint_uses_current_and_commanded_yaw_margin(self): self.run_case('boundary_yaw')

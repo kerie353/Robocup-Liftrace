@@ -64,6 +64,8 @@ class CompetitionSpeedCLI(unittest.TestCase):
         site=yaml.safe_load(SITE.read_text())
         for profile,(e,r,c,o) in results.items():
             self.assertEqual(e['source'],'generated_runtime')
+            self.assertEqual(c['drop_system']['settle']['xy_tolerance_m'],.06)
+            self.assertEqual(c['drop_system']['settle']['red_cross_xy_tolerance_m'],.04)
             self.assertEqual(e['settings']['flight_area'],site['flight_area'])
             self.assertEqual(e['settings']['corridor_waypoints'],site['corridor_waypoints'])
             self.assertEqual(e['settings']['corridor_geometry'],site['corridor_geometry'])

@@ -12,7 +12,7 @@
 # 省略 CLI 开关时继承 YAML：运动优化与高位续扫默认开启，分别可用 on/off 覆盖。
 # 动作预算默认保持 runtime_base：运动90s、目标120s；若显式需要，可添加
 # motion_action_timeout/target_action_timeout（0<秒数<=600），或 --motion-action-timeout。
-# 正式投递 FC AGL 0.32m、软件限高3.2m；规划速度/加速度与任务预算保持原值。
+# 正式投递 FC AGL 0.30m、软件限高3.2m；规划速度/加速度与任务预算保持原值。
 # 必填确认：现场测量完毕后改 true；false 禁止飞行，允许离线检查。
 site_confirmed: false
 # 完整搜索、三投、走廊与 H 末段任务；不提供靶标坐标。
@@ -23,10 +23,10 @@ low_agl: 1.4
 high_agl: 2.6
 # 软件 FC 离地限高；必须高于搜索高度，并结合机身顶部净空满足规则 4m。
 max_agl: 3.2
-# 投递下降目标为 FC 离地0.32m，允许释放0.28～0.36m；不是相机或投口高度。
-drop_agl: 0.32
-release_min_agl: 0.28
-release_max_agl: 0.36
+# 投递下降目标为 FC 离地0.30m，允许释放0.26～0.35m；不是相机或投口高度。
+drop_agl: 0.30
+release_min_agl: 0.26
+release_max_agl: 0.35
 # H 前水平转场的 FC 离地高度；保持既有比赛配置。
 landing_transit_agl: 1.0
 # H 视觉捕获的 FC 离地高度；保留比赛值，测试的 1.2m不自动推广。

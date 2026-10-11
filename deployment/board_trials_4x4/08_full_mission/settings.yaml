@@ -1,9 +1,9 @@
 mode: high_view_full
 low_agl: 1.4
 high_agl: 2.6
-drop_agl: 0.32
-release_min_agl: 0.28
-release_max_agl: 0.36
+drop_agl: 0.30
+release_min_agl: 0.26
+release_max_agl: 0.35
 landing_transit_agl: 1.0
 landing_capture_agl: 1.2
 landing_xy: null

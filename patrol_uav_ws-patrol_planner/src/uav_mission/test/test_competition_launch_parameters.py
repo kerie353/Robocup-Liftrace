@@ -79,6 +79,11 @@ class CompetitionLaunchParameters(unittest.TestCase):
                    if before.get(key) != after.get(key)}
         self.assertEqual(changed, {"/px4_max_distance"})
 
+    def test_drop_class_thresholds_reach_final_launch(self):
+        values = self.application(True)
+        self.assertEqual(values['/drop_system/settle/xy_tolerance_m'], .06)
+        self.assertEqual(values['/drop_system/settle/red_cross_xy_tolerance_m'], .04)
+
     def test_preview_keeps_control_limit_absent(self):
         values = self.application(False)
         self.assertNotIn("/px4_max_distance", values)

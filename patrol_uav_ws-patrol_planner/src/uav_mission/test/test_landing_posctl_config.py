@@ -12,7 +12,7 @@ TRIAL = ROOT / 'deployment/board_trials_4x4/common/uav_board_trials'
 sys.path[:0] = [str(PKG / 'src'), str(ROOT / 'vision_ws/src/uav_high_view/src'),
                str(TRIAL / 'scripts')]
 from uav_mission.landing_posctl_config import (DEFAULTS, validate_landing_posctl,
-                                              landing_control_parameters)
+                                              landing_control_parameters, landing_descent_parameters)
 from uav_mission.competition_config import generate as competition_generate
 from trial_config import generate as trial_generate, apply_site_profile, validate_settings
 
@@ -195,6 +195,36 @@ class LowHConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'requires POSCTL'): validate_settings(trial)
         non_h = yaml.safe_load((ROOT / 'deployment/board_trials_4x4/01_visual_interrupt/settings.yaml').read_text())
         with self.assertRaises(ValueError): apply_site_profile(non_h, {'landing_alignment_mode': 'high'})
+
+
+    def test_descent_modes_are_independent_of_capture_and_delivery(self):
+        trial = yaml.safe_load((ROOT / 'deployment/board_trials_4x4/03_h_landing/settings.yaml').read_text())
+        for function, settings in ((trial_generate, trial), (competition_generate, self.settings)):
+            _, base = self.generated(function, settings)
+            for alignment in ('low', 'high'):
+                for mode in (1, 2, 3):
+                    configured = copy.deepcopy(settings)
+                    configured.update(landing_alignment_mode=alignment, landing_descent_mode=mode,
+                                      landing_descent_speed_mps=.25)
+                    _, actual = self.generated(function, configured)
+                    self.assertEqual(actual['external_landing']['descent'],
+                                     dict(mode=mode, speed_mps=.25, max_step_dt_sec=.20))
+                    actual['external_landing']['alignment_mode'] = base['external_landing']['alignment_mode']
+                    actual['external_landing']['descent'] = base['external_landing']['descent']
+                    self.assertEqual(actual, base)
+        apply_site_profile(trial, dict(landing_descent_mode=3, landing_descent_speed_mps=.3))
+        validate_settings(trial)
+        non_h = yaml.safe_load((ROOT / 'deployment/board_trials_4x4/01_visual_interrupt/settings.yaml').read_text())
+        with self.assertRaises(ValueError): apply_site_profile(non_h, dict(landing_descent_mode=3))
+        non_h['landing_descent_mode'] = 3
+        with self.assertRaises(ValueError): validate_settings(non_h)
+
+    def test_descent_invalid_values_and_defaults(self):
+        self.assertEqual(landing_descent_parameters({}), dict(mode=1, speed_mps=.20, max_step_dt_sec=.20))
+        for mode in (True, 0, 4, '2', 2.0):
+            with self.assertRaises(ValueError): landing_descent_parameters(dict(landing_descent_mode=mode))
+        for speed in (True, 0, -.1, 1.01, float('nan'), float('inf'), '0.2'):
+            with self.assertRaises(ValueError): landing_descent_parameters(dict(landing_descent_speed_mps=speed))
 
 
 if __name__ == '__main__':

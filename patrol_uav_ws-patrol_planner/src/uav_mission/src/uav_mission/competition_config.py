@@ -12,7 +12,7 @@ from uav_high_view.survey_policy import SurveyPolicy
 from uav_mission.execution_speed import FollowingSpeed
 from uav_mission.corridor_speed import CorridorSpeedConfig
 from uav_mission.motion_optimization import MotionOptimization, optimize_post_route
-from uav_mission.landing_posctl_config import validate_landing_posctl, landing_control_parameters
+from uav_mission.landing_posctl_config import validate_landing_posctl, landing_control_parameters, landing_descent_parameters
 from uav_mission.navigation_recovery_config import recovery_parameters
 from uav_mission.drop_height_config import release_heights
 from uav_mission.drop_descent_config import drop_descent_parameters
@@ -213,6 +213,7 @@ def generate(root,out,settings,fc_xyz,rig):
     if posctl_stability is not None:
         control['external_landing']['posctl'] = posctl_stability
     control['external_landing']['alignment_mode'] = settings.get('landing_alignment_mode', 'low')
+    control['external_landing']['descent'] = landing_descent_parameters(settings)
     overrides={
         '/landing_detector/landing_enable_h_stroke_fallback':settings['landing_enable_h_stroke_fallback'],
         '/fast_planner_node/sdf_map/resolution':.10,

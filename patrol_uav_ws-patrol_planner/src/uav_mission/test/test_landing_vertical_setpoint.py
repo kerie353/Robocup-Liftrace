@@ -23,6 +23,7 @@ class PositionTarget:
 
     def __init__(self):
         self.position = NS(x=0., y=0., z=0.)
+        self.velocity = NS(x=0., y=0., z=0.)
         self.acceleration_or_force = NS(x=0., y=0., z=0.)
 
 
@@ -40,16 +41,18 @@ exec(compile(ast.Module(body=functions+[callback, init], type_ignores=[]), str(s
 
 
 class VerticalSetpointTests(unittest.TestCase):
-    def test_mask_controls_z_and_yaw_but_no_xy_position_or_velocity(self):
+    def test_mask_controls_zero_xy_velocity_z_and_yaw(self):
         pose = NS(position=NS(x=9., y=-8., z=.13),
                   orientation=NS(x=0., y=0., z=math.sin(.3), w=math.cos(.3)))
         header = NS(frame_id='camera_init', stamp=100.)
         out = namespace['vertical_target'](header, pose, np.eye(3))
-        self.assertEqual(out.type_mask, 2363)
+        self.assertEqual(out.type_mask, 2531)
         self.assertEqual(out.coordinate_frame, 1)
         self.assertEqual(out.position.z, .13)
         self.assertAlmostEqual(out.yaw, .6)
-        self.assertEqual((out.acceleration_or_force.x, out.acceleration_or_force.y), (0., 0.))
+        self.assertEqual((out.velocity.x, out.velocity.y), (0., 0.))
+        self.assertFalse(out.type_mask & (PositionTarget.IGNORE_VX | PositionTarget.IGNORE_VY))
+        self.assertTrue(out.type_mask & PositionTarget.IGNORE_AFX)
         self.assertEqual((out.position.x, out.position.y), (0., 0.))
         out.header.frame_id = 'map'
         self.assertEqual(header.frame_id, 'camera_init')

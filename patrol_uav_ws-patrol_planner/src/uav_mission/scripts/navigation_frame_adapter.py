@@ -156,6 +156,7 @@ def drop_vertical_target(header, pose, rotation):
 
 
 def vertical_target(header, pose, rotation):
+    """H mode 3: zero XY velocity plus independent Z position trajectory."""
     # A Z-only command is meaningful only between gravity-aligned frames.
     # Do not project a tilted mission vertical into uncontrolled local XY.
     if not np.allclose(rotation[:, 2], [0., 0., 1.], atol=1e-6, rtol=0.):
@@ -165,13 +166,12 @@ def vertical_target(header, pose, rotation):
     # MAVROS accepts ENU data here and performs the ENU->NED conversion.
     out.coordinate_frame = PositionTarget.FRAME_LOCAL_NED
     out.type_mask = (PositionTarget.IGNORE_PX | PositionTarget.IGNORE_PY |
-                     PositionTarget.IGNORE_VX | PositionTarget.IGNORE_VY |
-                     PositionTarget.IGNORE_VZ | PositionTarget.IGNORE_AFZ |
+                     PositionTarget.IGNORE_VZ | PositionTarget.IGNORE_AFX |
+                     PositionTarget.IGNORE_AFY | PositionTarget.IGNORE_AFZ |
                      PositionTarget.IGNORE_YAW_RATE)
     out.position.z = pose.position.z
-    # PX4 requires a finite input on every axis. Zero XY acceleration supplies
-    # that input without engaging XY position or velocity feedback control.
-    out.acceleration_or_force.x = out.acceleration_or_force.y = 0.
+    # Brake horizontal motion without returning to a fixed XY position.
+    out.velocity.x = out.velocity.y = 0.
     q = pose.orientation
     out.yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])[2]
     return out

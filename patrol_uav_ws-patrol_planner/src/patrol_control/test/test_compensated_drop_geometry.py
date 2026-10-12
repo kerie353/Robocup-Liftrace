@@ -1022,7 +1022,7 @@ class CompensatedDropGeometryTests(unittest.TestCase):
         guard_start = source.index('    if (compensated_alignment_enabled_ &&', source.index('void LLController::externalMissionTick()'))
         guard_end = source.index('    std_msgs::Bool detect_enable_msg;', guard_start)
         descent_start = source.index('    const bool pending_independent_drop =')
-        descent_end = source.index('    // High H descent carries XY', descent_start)
+        descent_end = source.index('    // H descent policy is independent', descent_start)
         cpp.write_text(PROGRAM.replace('METHODS', production).replace('DEFAULTS', defaults)
                        .replace('RELEASE_HEIGHT_PARAMETERS', height_parameters)
                        .replace('RED_CROSS_PARAMETERS', red_parameters)

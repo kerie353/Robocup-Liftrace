@@ -177,8 +177,11 @@ supervisor_name: competition_supervisor
 
 # 沿用已验收 POSCTL 视觉下降交接；飞手完成末段，不等同已验收自主落地得分。
 landing_handoff_mode: POSCTL
-# low preserves current capture; high: <=6cm, <0.1m/s for 1s, then Z-only.
+# low preserves current capture; high: <=6cm, <0.1m/s for 1s; descent mode is independent.
 landing_alignment_mode: low
+# 1: XYZ; 2: frozen H XY + Z ramp; 3: VX=VY=0 + Z ramp.
+landing_descent_mode: 1
+landing_descent_speed_mps: 0.20
 # 仅用于 POSCTL：静置 FC 离地 0.22m 时，目标处脚架名义间隙为 0.13m。
 # 最终停稳使用冻结 H 点；AUTO.LAND 不应用本参数块。
 landing_posctl:

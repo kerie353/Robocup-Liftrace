@@ -628,6 +628,7 @@ void LLController::clearExternalLandingState(bool disable_detector) {
     external_landing_active_ = false;
     external_landing_new_mark_ = false;
     external_landing_alignment_complete_ = false;
+    landing_descent_profile_.reset();
     landing_high_alignment_window_.reset();
     landing_capture_window_.reset();
     landing_handoff_window_.reset();
@@ -794,7 +795,8 @@ void LLController::externalLandingTick() {
                     external_landing_aligned_goal_.pose.position.y,external_landing_capture_height_,
                     land_height,external_landing_auto_land_height_,uav_pose.pose.position.z);
                 ROS_INFO("[ExternalLanding] alignment_mode=%s; descent_xy_control=%s",
-                    external_landing_alignment_mode_.c_str(), high_mode ? "disabled" : "position");
+                    external_landing_alignment_mode_.c_str(),
+                    landing_descent_config_.mode == 3 ? "zero_velocity" : "position");
             }
         }
         external_landing_new_mark_ = false;
@@ -1735,12 +1737,31 @@ void LLController::cmdCallback(const ros::TimerEvent& event) {
         mavros_point_cmd.pose.position.y = zero_velocity_drop
             ? uav_pose.pose.position.y : compensated_fc_goal_.pose.position.y;
     }
-    // High H descent carries XY only as a transform anchor. The adapter ignores
-    // XY position/velocity; keep lateral error out of the generic Z lead limit.
-    const bool vertical_landing = external_mission_mode_ && Drone_mode == Land &&
+    // H descent policy is independent of high/low visual acquisition.
+    const bool independent_landing = external_mission_mode_ && Drone_mode == Land &&
         external_landing_active_ && !external_landing_cancelled_ &&
-        external_landing_alignment_complete_ && external_landing_alignment_mode_ == "high";
+        external_landing_alignment_complete_ && landing_descent_config_.mode != 1;
+    const bool vertical_landing = independent_landing && landing_descent_config_.mode == 3;
+    if (independent_landing) {
+        const double now = ros::Time::now().toSec();
+        Eigen::Vector3d velocity, angular;
+        if (external_landing_auto_land_requested_) {
+            // Preserve the existing handoff hold height while POSCTL is pending.
+            landing_descent_profile_.pause(now);
+        } else if (freshMotion(&velocity, &angular) && externalLandingControlReady(ros::Time::now())) {
+            if (!landing_descent_profile_.active())
+                landing_descent_profile_.start(motion_odom_.pose.pose.position.z, land_height, now);
+            mavros_point_cmd.pose.position.z = landing_descent_profile_.update(now);
+        } else {
+            landing_descent_profile_.pause(now);
+            mavros_point_cmd.pose.position.z = landing_descent_profile_.active()
+                ? landing_descent_profile_.height() : uav_pose.pose.position.z;
+        }
+        mavros_point_cmd.pose.position.x = external_landing_aligned_goal_.pose.position.x;
+        mavros_point_cmd.pose.position.y = external_landing_aligned_goal_.pose.position.y;
+    }
     if (vertical_landing) {
+        // XY is a frame-conversion anchor only; raw output uses VX=VY=0.
         mavros_point_cmd.pose.position.x = uav_pose.pose.position.x;
         mavros_point_cmd.pose.position.y = uav_pose.pose.position.y;
     }
@@ -1757,7 +1778,7 @@ void LLController::cmdCallback(const ros::TimerEvent& event) {
         const double dz = static_cast<double>(takeoff_point[2]) - current_pos.z();
         mavros_point_cmd.pose.position.z = current_pos.z() +
             std::max(-takeoff_lead, std::min(takeoff_lead, dz));
-    } else if (!independent_drop && distance_to_target > px4_max_distance &&
+    } else if (!independent_drop && !independent_landing && distance_to_target > px4_max_distance &&
         !(external_mission_mode_ && Drone_mode == Run_point &&
           external_planner_height_hold_active_ && !external_planner_command_accepted)) {
         Eigen::Vector3d direction = (target_pos - current_pos).normalized();
@@ -2117,6 +2138,11 @@ void LLController::load_params() {
         "external_landing/handoff_mode", "AUTO.LAND");
     external_landing_alignment_mode_ = nh_.param<std::string>(
         "external_landing/alignment_mode", "low");
+    landing_descent_config_.mode = nh_.param("external_landing/descent/mode", 1);
+    landing_descent_config_.speed_mps = nh_.param("external_landing/descent/speed_mps", 0.20);
+    landing_descent_config_.max_step_dt_sec = nh_.param("external_landing/descent/max_step_dt_sec", 0.20);
+    if (!landing_descent_config_.valid()) throw std::invalid_argument("invalid H descent configuration");
+    landing_descent_profile_ = DropDescentProfile(landing_descent_config_);
     if ((external_landing_alignment_mode_ != "low" && external_landing_alignment_mode_ != "high") ||
         (external_landing_alignment_mode_ == "high" && external_landing_handoff_mode_ != "POSCTL"))
         throw std::invalid_argument("H alignment_mode must be low/high; high requires POSCTL");
@@ -3609,6 +3635,7 @@ void LLController::missionCommandCallback(
             external_landing_wire_command_stamp_ = msg->goal.header.stamp;
             external_landing_new_mark_ = false;
             external_landing_alignment_complete_ = false;
+            landing_descent_profile_.reset();
             landing_high_alignment_window_.reset();
             landing_capture_window_.reset();
             landing_handoff_window_.reset();

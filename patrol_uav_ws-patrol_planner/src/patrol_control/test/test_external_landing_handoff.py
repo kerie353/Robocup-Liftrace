@@ -134,6 +134,8 @@ public:
     bool flag_land=false, flag_takeoff_done=true, have_land_mark=false;
     bool have_planner_cmd=false, have_waypoint_mark=false, have_cross_mark=false;
     bool align_ok=false;
+    struct { int mode=1; } landing_descent_config_;
+    SettlementWindowStub landing_descent_profile_;
     std::string external_landing_alignment_mode_="low";
     SettlementWindowStub landing_high_alignment_window_;
     bool highLandingAlignmentReady() { return false; }

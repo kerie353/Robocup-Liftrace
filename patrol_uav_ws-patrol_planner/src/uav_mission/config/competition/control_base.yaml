@@ -20,6 +20,10 @@ px4_max_distance: 0.2
 takeoff_z_lead_m: 0.0
 max_yaw_change: 0.2
 external_landing:
+  descent:
+    mode: 1
+    speed_mps: 0.20
+    max_step_dt_sec: 0.20
   alignment_mode: low  # high requires POSCTL and the navigation frame adapter
   frame: camera_init
   detections_topic: /uav_vision/detections_mapped

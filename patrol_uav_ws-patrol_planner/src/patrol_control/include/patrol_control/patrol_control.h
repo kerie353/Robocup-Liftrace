@@ -302,6 +302,9 @@ private:
     std::string external_landing_alignment_mode_ = "low";
     LandingHighAlignmentWindow landing_high_alignment_window_;
     ros::Publisher landing_vertical_cmd_pub_;
+    // Reuse only the mathematical ramp; H has its own config and transaction.
+    DropDescentConfig landing_descent_config_;
+    DropDescentProfile landing_descent_profile_;
     bool highLandingAlignmentReady();
     double external_landing_capture_height_ = 0.75;
     double external_landing_watchdog_timeout_sec_ = 120.0;

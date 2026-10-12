@@ -91,7 +91,7 @@ class FrameTests(unittest.TestCase):
         self.msg.pose.orientation.w = 0; self.call()
         self.pub.publish.assert_not_called()
 
-    def test_vertical_command_converts_z_and_yaw_without_xy_feedback(self):
+    def test_vertical_command_converts_z_and_yaw_with_zero_xy_velocity(self):
         self.tf.transform.translation.z = -.22
         self.msg.pose.position.z = .35
         with patch.object(rospy.Time, 'now', return_value=rospy.Time(10)), patch.object(rospy, 'logwarn_throttle'):
@@ -101,9 +101,9 @@ class FrameTests(unittest.TestCase):
         self.assertEqual(out.header.stamp, self.msg.header.stamp)
         self.assertAlmostEqual(out.position.z, .13)
         self.assertAlmostEqual(out.yaw, np.pi/2)
-        self.assertEqual(out.type_mask, 2363)
-        self.assertEqual(out.acceleration_or_force.x, 0.)
-        self.assertEqual(out.acceleration_or_force.y, 0.)
+        self.assertEqual(out.type_mask, 2531)
+        self.assertEqual(out.velocity.x, 0.)
+        self.assertEqual(out.velocity.y, 0.)
 
     def test_vertical_command_rejects_tilted_frame(self):
         self.tf.transform.rotation.x = .05

@@ -2170,7 +2170,7 @@ void LLController::load_params() {
     drop_settle_config_.max_vertical_speed_mps = 0.10;
     drop_settle_config_.stable_duration_sec = 0.30;
     // Shared release config keeps legacy XY gates when height-only is disabled.
-    // Pre-descent horizontal stability has its own independent config.
+    // Pre-descent XY correction has its own independent class thresholds.
     load_stability("drop_system/settle", &drop_settle_config_);
     drop_compensate_before_descent_ = nh_.param("drop_system/compensate_before_descent", true);
     drop_release_height_only_ = nh_.param("drop_system/release_height_only", true);
@@ -2184,14 +2184,19 @@ void LLController::load_params() {
     if (!std::isfinite(drop_red_cross_xy_tolerance_m_) || drop_red_cross_xy_tolerance_m_ <= 0.0)
         throw std::invalid_argument("invalid red cross drop XY tolerance");
     const std::string pre_descent_root = "drop_system/pre_descent";
-    drop_pre_descent_config_.xy_tolerance_m = nh_.param(pre_descent_root + "/xy_tolerance_m", 0.04);
+    drop_pre_descent_config_.xy_tolerance_m = nh_.param(pre_descent_root + "/xy_tolerance_m", 0.06);
+    drop_pre_descent_red_cross_xy_tolerance_m_ = nh_.param(
+        pre_descent_root + "/red_cross_xy_tolerance_m", 0.04);
+    if (!std::isfinite(drop_pre_descent_red_cross_xy_tolerance_m_) ||
+        drop_pre_descent_red_cross_xy_tolerance_m_ <= 0.0)
+        throw std::invalid_argument("invalid red cross pre-descent XY tolerance");
+    // Keep old parameter names readable, without speed/duration/sample gates.
     drop_pre_descent_config_.max_horizontal_speed_mps = nh_.param(pre_descent_root + "/max_horizontal_speed_mps", 0.10);
     drop_pre_descent_config_.stable_duration_sec = nh_.param(pre_descent_root + "/stable_duration_sec", 1.0);
     drop_pre_descent_config_.max_odom_age_sec = nh_.param(pre_descent_root + "/max_odom_age_sec", 0.20);
     drop_pre_descent_config_.max_sample_gap_sec = nh_.param(pre_descent_root + "/max_sample_gap_sec", 0.20);
     const int pre_descent_samples = nh_.param(pre_descent_root + "/min_samples", 3);
-    if (pre_descent_samples < 3) throw std::invalid_argument("pre-descent requires distinct samples");
-    drop_pre_descent_config_.min_samples = pre_descent_samples;
+    drop_pre_descent_config_.min_samples = std::max(0, pre_descent_samples);
     if (!drop_pre_descent_config_.valid()) throw std::invalid_argument("invalid pre-descent configuration");
     drop_pre_descent_window_ = DropPreDescentStabilityWindow(drop_pre_descent_config_);
     landing_settle_config_.height_tolerance_m = 0.05;
@@ -4042,15 +4047,17 @@ bool LLController::setCompensatedDropTarget(geometry_msgs::PoseStamped* target) 
     return true;
 }
 
-double LLController::compensatedDropXYTolerance() const {
+double LLController::compensatedDropXYTolerance(bool release) const {
     // Only the bound mission class may select the standard-board tolerance.
     const auto& cls = compensated_context_.semantic_target_class;
     if (cls == "tent" || cls == "pillbox" || cls == "bridge" || cls == "panzer")
-        return drop_settle_config_.xy_tolerance_m;
-    if (cls == "red_cross") return drop_red_cross_xy_tolerance_m_;
+        return release ? drop_settle_config_.xy_tolerance_m : drop_pre_descent_config_.xy_tolerance_m;
+    const double cross_tolerance = release ? drop_red_cross_xy_tolerance_m_
+                                          : drop_pre_descent_red_cross_xy_tolerance_m_;
+    if (cls == "red_cross") return cross_tolerance;
     // Unsupported/unknown classes retain the old 4cm ceiling, even if the
     // configurable red-cross tolerance is raised. A tighter setting still wins.
-    return std::min(0.04, drop_red_cross_xy_tolerance_m_);
+    return std::min(0.04, cross_tolerance);
 }
 
 bool LLController::compensatedDropTimeoutReady() {
@@ -4118,27 +4125,27 @@ bool LLController::compensatedDropSettled(bool release, double* error, double* s
     // Capture keeps visual identity/geometry/freshness, but does not wait for
     // release-level position, velocity, height or a motion stability window.
     // Final release uses the current fresh motion sample without recapture.
-    // Pre-descent has a separate horizontal-only duration/sample window.
+    // Pre-descent checks current double XY only, independently of final release.
     if (!release) return externalLandingControlReady(ros::Time::now());
     if (!require_release_height) {
-        const auto result = drop_pre_descent_window_.update(now,
-            motion_odom_.header.stamp.toSec(), motion_odom_receipt_.toSec(),
-            xy_error, horizontal_speed, externalLandingControlReady(ros::Time::now()));
-        if (!result.ready) ROS_INFO_THROTTLE(1.0,
-            "[DropGeometry] pre_descent_wait reason=%s fc_xy_error=%.4f outlet_xy_error=%.4f "
-            "horizontal_speed=%.4f span=%.3f required=%.3f samples=%zu xy_tolerance=%.3f speed_limit=%.3f",
-            result.reason,fc_error,outlet_error,horizontal_speed,result.stable_for_sec,
-            drop_pre_descent_config_.stable_duration_sec,result.sample_count,
-            drop_pre_descent_config_.xy_tolerance_m,drop_pre_descent_config_.max_horizontal_speed_mps);
-        else ROS_INFO("[DropGeometry] pre_descent_ready slot=%u decision=%u span=%.3f samples=%zu "
-            "fc_xy_error=%.4f outlet_xy_error=%.4f horizontal_speed=%.4f",
-            c.payload_slot,c.decision_seq,result.stable_for_sec,result.sample_count,
-            fc_error,outlet_error,horizontal_speed);
-        return result.ready;
+        const double xy_tolerance = compensatedDropXYTolerance(false);
+        const bool ready = std::isfinite(xy_error) && xy_error < xy_tolerance &&
+            now-motion_odom_.header.stamp.toSec() <= drop_pre_descent_config_.max_odom_age_sec &&
+            now-motion_odom_receipt_.toSec() <= drop_pre_descent_config_.max_odom_age_sec &&
+            externalLandingControlReady(ros::Time::now());
+        if (!ready) ROS_INFO_THROTTLE(1.0,
+            "[DropGeometry] pre_descent_wait fc_xy_error=%.4f outlet_xy_error=%.4f "
+            "horizontal_speed=%.4f xy_tolerance=%.3f class=%s",
+            fc_error,outlet_error,horizontal_speed,xy_tolerance,b.semantic_target_class.c_str());
+        else ROS_INFO("[DropGeometry] pre_descent_ready slot=%u decision=%u "
+            "fc_xy_error=%.4f outlet_xy_error=%.4f horizontal_speed=%.4f xy_tolerance=%.3f class=%s",
+            c.payload_slot,c.decision_seq,fc_error,outlet_error,horizontal_speed,
+            xy_tolerance,b.semantic_target_class.c_str());
+        return ready;
     }
     const double xy_tolerance = compensatedDropXYTolerance();
     const bool timeout_release = require_release_height && timeout_fallback;
-    // Pre-descent XY/speed stability remains mandatory in serial mode.
+    // Independent pre-descent XY correction remains mandatory in serial mode.
     // Once descending, height-only release ignores horizontal error magnitude;
     // fresh feedback, bound context, flight-state and actuator permission stay.
     const bool ready = std::isfinite(xy_error) && std::isfinite(horizontal_speed) &&
@@ -4202,7 +4209,7 @@ double LLController::compensatedDropCommandHeight() {
         ROS_INFO("[DropGeometry] descent_started slot=%u decision=%u xy_tolerance=%.3f class=%s "
                  "capture_z=%.4f release_z=%.4f serial=%s",
                  compensated_context_.payload_slot, compensated_context_.decision_seq,
-                 drop_compensate_before_descent_ ? drop_pre_descent_config_.xy_tolerance_m : compensatedDropXYTolerance(),
+                 compensatedDropXYTolerance(!drop_compensate_before_descent_),
                  compensated_context_.semantic_target_class.c_str(),
                  external_alignment_capture_height_, drop_release_setpoint_height_,
                  drop_compensate_before_descent_ ? "true" : "false");

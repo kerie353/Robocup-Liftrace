@@ -148,6 +148,7 @@ private:
     double drop_red_cross_xy_tolerance_m_ = 0.04;
     LandingHandoffStabilityWindow drop_capture_window_, drop_release_window_;
     DropPreDescentStabilityConfig drop_pre_descent_config_;
+    double drop_pre_descent_red_cross_xy_tolerance_m_ = 0.04;
     DropPreDescentStabilityWindow drop_pre_descent_window_;
     LandingHandoffStabilityWindow landing_capture_window_, landing_handoff_window_;
     void motionOdomCallback(const nav_msgs::Odometry::ConstPtr& msg);
@@ -156,7 +157,7 @@ private:
     bool freshMotion(Eigen::Vector3d* velocity, Eigen::Vector3d* angular,
                      const char** rejection = nullptr) const;
     bool setCompensatedDropTarget(geometry_msgs::PoseStamped* target);
-    double compensatedDropXYTolerance() const;
+    double compensatedDropXYTolerance(bool release = true) const;
     bool compensatedDropTimeoutReady();
     bool compensatedDropSettled(bool release, double* error = nullptr,
                                 double* speed = nullptr, bool require_release_height = true);

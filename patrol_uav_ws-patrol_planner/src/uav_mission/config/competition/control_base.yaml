@@ -69,10 +69,11 @@ drop_system:
     max_step_dt_sec: 0.20
     zero_velocity_setpoint_topic: /navigation/drop_setpoint_vertical
   release_height_only: true  # 下降后释放几何仅检查高度；保留任务、反馈及执行许可
-  compensate_before_descent: true  # 先高位水平补偿，双XY及水平速度连续达标1秒后下降
-  # 下降入口独立门控；不检查窗口位移、高度误差或竖直速度。
+  compensate_before_descent: true  # 当前补偿到位即下降，不要求速度或累计停稳
+  # 下降前仅检查当前双XY；速度/稳窗字段兼容保留，不阻止下降。
   pre_descent:
-    xy_tolerance_m: 0.04
+    xy_tolerance_m: 0.06
+    red_cross_xy_tolerance_m: 0.04
     max_horizontal_speed_mps: 0.10
     stable_duration_sec: 1.0
     max_odom_age_sec: 0.20
@@ -87,8 +88,8 @@ drop_system:
   # height_tolerance_m、两项速度、stable_duration_sec、max_sample_gap_sec、min_samples
   # 仅兼容保留，不参与补偿投递放行；调这些字段不能改变投递行为。H使用独立配置。
   settle:
-    xy_tolerance_m: 0.06  # 标准大靶：FC及投口误差均严格小于6cm
-    red_cross_xy_tolerance_m: 0.04  # 红十字独立保持4cm，未知类别不放宽
+    xy_tolerance_m: 0.10  # 标准靶末段容差10cm；下降前仍先完成6cm补偿
+    red_cross_xy_tolerance_m: 0.06  # 红十字末段独立6cm；下降前仍4cm
     height_tolerance_m: 0.05
     max_horizontal_speed_mps: 0.05
     max_vertical_speed_mps: 0.10

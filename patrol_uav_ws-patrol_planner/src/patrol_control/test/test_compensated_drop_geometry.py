@@ -188,6 +188,7 @@ public:
  LandingHandoffStabilityConfig drop_settle_config_,landing_settle_config_;
  LandingHandoffStabilityWindow drop_capture_window_,drop_release_window_;
  DropPreDescentStabilityConfig drop_pre_descent_config_;
+ double drop_pre_descent_red_cross_xy_tolerance_m_=.04;
  DropPreDescentStabilityWindow drop_pre_descent_window_;
  LandingHandoffStabilityWindow landing_capture_window_,landing_handoff_window_;
  LandingHandoffStabilityWindow landing_high_alignment_window_; // reset-only H dependency
@@ -224,7 +225,7 @@ public:
  bool motionTimePending() const;
  bool freshMotion(Eigen::Vector3d*,Eigen::Vector3d*,const char** =nullptr)const;
  bool setCompensatedDropTarget(geometry_msgs::PoseStamped*);
- double compensatedDropXYTolerance() const;
+ double compensatedDropXYTolerance(bool release=true) const;
  bool compensatedDropTimeoutReady();
  bool compensatedDropSettled(bool,double* =nullptr,double* =nullptr,bool=true);
  double compensatedDropCommandHeight();
@@ -284,10 +285,8 @@ void finish(LLController&c,const std::shared_ptr<Transport>&t){
 }
 void settle_before_descent(LLController&c,double start,double height=1){
  const auto g=c.compensated_fc_goal_.pose.position;
- for(int i=0;i<=10;++i){
-  odom(c,start+i*.1,g.x,g.y,height);
-  close(c.compensatedDropCommandHeight(),i<10?1:.40);
- }
+ odom(c,start,g.x,g.y,height);
+ close(c.compensatedDropCommandHeight(),.40);
  assert(c.drop_descent_started_);
 }
 int main(int argc,char**argv){
@@ -312,11 +311,11 @@ int main(int argc,char**argv){
    // Freeze no longer needs continuing visual ready or a fresh source image.
    d.uav_drop_ready_=false;d.have_waypoint_mark=d.have_cross_mark=false;
    d.drop_settle_config_.stable_duration_sec=100;d.drop_settle_config_.min_samples=1000;
-    odom(d,101,g.x+.05,g.y,1,.8);d.motion_odom_.twist.twist.linear.z=.5;tick();
+    odom(d,101,g.x+.061,g.y,1,.8);d.motion_odom_.twist.twist.linear.z=.5;tick();
     assert(!d.drop_descent_started_);close(d.align_height,1);
     for(int i=0;i<=10;++i){
-     odom(d,101.1+i*.1,g.x+.02,g.y,1,.08);tick();
-     assert(d.drop_descent_started_==(i==10));close(d.align_height,i<10?1:.40);
+     odom(d,101.1+i*.1,g.x+.02,g.y,1,.8);tick();
+     assert(d.drop_descent_started_);close(d.align_height,.40);
     }
    assert(d.drop_descent_started_);close(d.align_height,.40);
    // Descent phase latches, but release readiness never latches.
@@ -389,61 +388,142 @@ int main(int argc,char**argv){
    settle_before_descent(c,101.1);
    assert(c.drop_descent_started_);ros::clock_sec=102.5;
    close(c.compensatedDropCommandHeight(),.40);assert(!c.compensatedDropSettled(true));
-  }else if(name=="serial_speed_reset" || name=="serial_xy_reset"){
+  }else if(name=="serial_speed_reset"){
    capture(c);const auto g=c.compensated_fc_goal_.pose.position;
-   for(int i=0;i<9;++i){odom(c,101+i*.1,g.x,g.y,1);close(c.compensatedDropCommandHeight(),1);}
-   odom(c,101.9,g.x+(name=="serial_xy_reset"?.041:0),g.y,1,
-        name=="serial_speed_reset"?.101:0);
-   close(c.compensatedDropCommandHeight(),1);
-   settle_before_descent(c,102);
+   c.drop_pre_descent_config_.max_horizontal_speed_mps=.001;
+   c.drop_pre_descent_config_.stable_duration_sec=100;
+   c.drop_pre_descent_config_.min_samples=1000;
+   odom(c,101,g.x+.05,g.y,1,.8);
+   close(c.compensatedDropCommandHeight(),.40);assert(c.drop_descent_started_);
+  }else if(name=="serial_xy_reset"){
+   capture(c);const auto g=c.compensated_fc_goal_.pose.position;
+   odom(c,101,g.x+.061,g.y,1);close(c.compensatedDropCommandHeight(),1);
+   odom(c,101.01,g.x+.059,g.y,1,.8);
+   close(c.compensatedDropCommandHeight(),.40);assert(c.drop_descent_started_);
   }else if(name=="serial_duplicate_gap"){
    capture(c);const auto g=c.compensated_fc_goal_.pose.position;
-   odom(c,101,g.x,g.y,1);close(c.compensatedDropCommandHeight(),1);
+   odom(c,101,g.x+.07,g.y,1);close(c.compensatedDropCommandHeight(),1);
    for(int i=0;i<50;++i)close(c.compensatedDropCommandHeight(),1);
-   for(int i=1;i<=5;++i){odom(c,101+i*.1,g.x,g.y,1);close(c.compensatedDropCommandHeight(),1);}
-   settle_before_descent(c,102); // Missing samples cannot contribute to the one-second interval.
+   ros::clock_sec=101.3;assert(!c.compensatedDropSettled(true,nullptr,nullptr,false));
+   // A fresh first sample after a gap can enter descent immediately.
+   odom(c,102,g.x+.05,g.y,1,.8);close(c.compensatedDropCommandHeight(),.40);
   }else if(name=="serial_horizontal_only"){
    capture(c);const auto g=c.compensated_fc_goal_.pose.position;
    for(int i=0;i<=10;++i){
-    // Both endpoints remain inside 4cm, but move 6cm across the window.
-    // No displacement, Z error or vertical-speed requirement is imposed.
-    odom(c,101+i*.1,g.x+(i<5?-.03:.03),g.y,1+i*.01,.1);
+    // No displacement, Z error or vertical-speed gate is imposed.
+    odom(c,101+i*.1,g.x+(i<5?-.05:.05),g.y,1+i*.01,.8);
     c.motion_odom_.twist.twist.linear.z=.5;
-    close(c.compensatedDropCommandHeight(),i<10?1:.40);
+    close(c.compensatedDropCommandHeight(),.40);
    }
   }else if(name=="serial_exact_limits"){
-   DropPreDescentStabilityWindow w;
-   for(int i=0;i<=10;++i){auto r=w.update(101+i*.1,101+i*.1,101+i*.1,.04,.10,true);
-    assert(r.ready==(i==10));}
-   assert(!w.update(102.1,102.1,102.1,.04001,.10,true).ready);
+   for(const std::string cls:{"panzer","red_cross","tank"}){
+    ros::clock_sec=100;LLController d;d.servo_alignment_context_.semantic_target_class=cls;
+    d.servo_alignment_target_class_=cls;capture(d);
+    // Put both FC and outlet at zero to test exact equality without subtraction rounding.
+    d.drop_slot_offsets_[0]={{0,0}};d.compensated_fc_goal_.pose.position={0,0,1};
+    d.compensated_target_center_={0,0,1};const double limit=cls=="panzer"?.06:.04;
+    odom(d,101,limit,0,1,.8);
+    assert(!d.compensatedDropSettled(true,nullptr,nullptr,false));
+    close(d.compensatedDropCommandHeight(),1);
+    odom(d,101.01,std::nextafter(limit,0.),0,1,.8);
+    assert(d.compensatedDropSettled(true,nullptr,nullptr,false));
+    close(d.compensatedDropCommandHeight(),.40);
+   }
   }else if(name=="serial_outlet_speed"){
    capture(c);const auto g=c.compensated_fc_goal_.pose.position;
-   for(int i=0;i<=12;++i){
-    odom(c,101+i*.1,g.x,g.y,1,0,0,attitude(0),1.0);
-    // FC is stationary; outlet moves at 12cm/s because of rotation.
-    close(c.compensatedDropCommandHeight(),1);
-   }
-   settle_before_descent(c,102.3);
+   odom(c,101,g.x,g.y,1,0,0,attitude(0),10.0);
+   // FC is stationary; outlet speed is 1.2m/s. It is diagnostic only.
+   close(c.compensatedDropCommandHeight(),.40);
   }else if(name=="serial_invalid_window"){
    for(int reason=0;reason<3;++reason){
     ros::clock_sec=100;LLController d;capture(d);const auto g=d.compensated_fc_goal_.pose.position;
-    for(int i=0;i<9;++i){odom(d,101+i*.1,g.x,g.y,1);close(d.compensatedDropCommandHeight(),1);}
-    if(reason==0){odom(d,101.9,g.x,g.y,1);d.control_ready=false;}
-    if(reason==1){ros::clock_sec=102.1;d.uav_pose.header.stamp=ros::Time::now();}
-    if(reason==2){odom(d,101.9,g.x,g.y,1);d.servo_alignment_context_.mission_id="other";}
+    odom(d,101,g.x,g.y,1);
+    if(reason==0)d.control_ready=false;
+    if(reason==1){ros::clock_sec=101.3;d.uav_pose.header.stamp=ros::Time::now();}
+    if(reason==2)d.servo_alignment_context_.mission_id="other";
     close(d.compensatedDropCommandHeight(),1);
     d.control_ready=true;d.servo_alignment_context_.mission_id=d.compensated_context_.mission_id;
-    settle_before_descent(d,102.2);
+    odom(d,102.2,g.x,g.y,1,.8);close(d.compensatedDropCommandHeight(),.40);
    }
   }else if(name=="serial_partial_reset"){
    for(bool detection:{false,true}){
     ros::clock_sec=100;LLController d;capture(d);auto g=d.compensated_fc_goal_.pose.position;
-    for(int i=0;i<9;++i){odom(d,101+i*.1,g.x,g.y,1);close(d.compensatedDropCommandHeight(),1);}
+    odom(d,101,g.x+.07,g.y,1);close(d.compensatedDropCommandHeight(),1);
     if(detection)d.resetDetectionState();else d.resetDropState();
     d.servo_alignment_context_.header.stamp=ros::Time(102);
     odom(d,102,2,3,1);auto p=center(102);assert(d.setCompensatedDropTarget(&p));
     d.uav_drop_ready_=true;d.latest_drop_ready_time_=ros::Time(102);
     assert(d.freezeCompensatedDropTarget());settle_before_descent(d,102.1);
+   }
+  }else if(name=="serial_split_thresholds"){
+   for(const std::string cls:{"tent","pillbox","bridge","panzer","red_cross"})
+    for(bool height_only:{false,true}){
+     ros::clock_sec=100;LLController d;auto transport=std::make_shared<Transport>();
+     d.servo_client.impl=d.servo_action_client_.impl=transport;
+     const bool cross=cls=="red_cross";
+     d.current_align_mode_=cross?"drop_cross":"drop_circle";
+     d.servo_alignment_context_.align_mode=d.current_align_mode_;
+     d.servo_alignment_context_.semantic_target_class=cls;d.servo_alignment_target_class_=cls;
+     d.drop_settle_config_.xy_tolerance_m=.10;d.drop_red_cross_xy_tolerance_m_=.06;
+     d.drop_release_height_only_=height_only;
+     d.drop_alignment_started_=d.drop_timeout_last_check_=ros::Time(100);
+     capture(d);const auto g=d.compensated_fc_goal_.pose.position;
+     close(d.compensatedDropXYTolerance(),cross?.06:.10);
+     close(d.compensatedDropXYTolerance(false),cross?.04:.06);
+     const double middle=cross?.05:.08;
+     // The final tolerance cannot enable high-level compensation, even after 20s.
+     for(double t:{101.,121.}){
+      odom(d,t,g.x+middle,g.y,1,.8);close(d.compensatedDropCommandHeight(),1);
+      assert(!d.drop_descent_started_);
+      assert(d.executeDropAction(1)==DropActionResult::kPending&&transport->calls==0);
+     }
+     // Disable fallback: ordinary entry and release must not depend on it.
+     d.drop_release_timeout_enabled_=false;
+     odom(d,121.01,g.x+(cross?.039:.059),g.y,1,.8);
+     close(d.compensatedDropCommandHeight(),.40);assert(d.drop_descent_started_);
+     odom(d,121.02,g.x+middle,g.y,.40,.8);
+     assert(d.compensatedDropSettled(true));
+     assert(cross?d.crossReleaseReady():d.circleReleaseReady());
+     assert(d.executeDropAction(1)==DropActionResult::kPending&&d.servo_action_attempted_);
+     for(int i=0;i<50;++i)d.executeDropAction(1);
+     finish(d,transport);assert(transport->calls==1);
+     close(d.compensated_fc_goal_.pose.position.x,g.x);close(d.compensated_fc_goal_.pose.position.y,g.y);
+    }
+  }else if(name=="serial_pre_parameters"){
+   close(c.drop_pre_descent_config_.xy_tolerance_m,.06);
+   close(c.drop_pre_descent_red_cross_xy_tolerance_m_,.04);
+   c.nh_.values["drop_system/pre_descent/xy_tolerance_m"]=.055;
+   c.nh_.values["drop_system/pre_descent/red_cross_xy_tolerance_m"]=.035;
+   for(const std::string key:{"max_horizontal_speed_mps","stable_duration_sec","max_sample_gap_sec","min_samples"})
+    c.nh_.values["drop_system/pre_descent/"+key]=0;
+   c.loadRedCrossXYTolerance();capture(c);
+   close(c.compensatedDropXYTolerance(false),.055);
+   c.compensated_context_.semantic_target_class="red_cross";
+   close(c.compensatedDropXYTolerance(false),.035);
+   c.compensated_context_.semantic_target_class="tank";
+   close(c.compensatedDropXYTolerance(false),.035);
+   for(const std::string key:{"xy_tolerance_m","red_cross_xy_tolerance_m","max_odom_age_sec"})
+    for(double value:{0.,-1.,std::numeric_limits<double>::quiet_NaN()}){
+     LLController d;d.nh_.values["drop_system/pre_descent/"+key]=value;
+     bool threw=false;try{d.loadRedCrossXYTolerance();}catch(const std::invalid_argument&){threw=true;}
+     assert(threw);
+    }
+  }else if(name=="serial_pre_freshness"){
+   capture(c);const auto g=c.compensated_fc_goal_.pose.position;
+   c.drop_pre_descent_config_.max_odom_age_sec=.05;
+   odom(c,101,g.x,g.y,1);ros::clock_sec=101.06;
+   assert(!c.compensatedDropSettled(true,nullptr,nullptr,false));
+   odom(c,101.07,g.x,g.y,1,.8);close(c.compensatedDropCommandHeight(),.40);
+  }else if(name=="serial_release_exact_limits"){
+   for(const std::string cls:{"panzer","red_cross"}){
+    ros::clock_sec=100;LLController d;
+    d.servo_alignment_context_.semantic_target_class=cls;d.servo_alignment_target_class_=cls;
+    d.drop_settle_config_.xy_tolerance_m=.10;d.drop_red_cross_xy_tolerance_m_=.06;
+    d.drop_release_height_only_=false;capture(d);settle_before_descent(d,101);
+    d.drop_slot_offsets_[0]={{0,0}};d.compensated_fc_goal_.pose.position={0,0,1};
+    d.compensated_target_center_={0,0,1};const double limit=cls=="panzer"?.10:.06;
+    odom(d,102.1,limit,0,.40,.8);assert(!d.compensatedDropSettled(true));
+    odom(d,102.11,std::nextafter(limit,0.),0,.40,.8);assert(d.compensatedDropSettled(true));
    }
   }else if(name=="serial_descent_modes"){
    for(int mode=1;mode<=3;++mode){
@@ -455,14 +535,14 @@ int main(int argc,char**argv){
     if(mode!=1){
      close(d.drop_descent_profile_.height(),1);
      const auto g=d.compensated_fc_goal_.pose.position;
-     odom(d,102.1,g.x+.25,g.y-.20,1);
+     odom(d,101.1,g.x+.25,g.y-.20,1);
      assert(d.composeDropDescentCommand()==mode);close(d.mavros_point_cmd.pose.position.z,.98);
      close(d.mavros_point_cmd.pose.position.x,mode==2?g.x:g.x+.25);
      close(d.mavros_point_cmd.pose.position.y,mode==2?g.y:g.y-.20);
      // Horizontal motion cannot change the independent Z trajectory.
-     odom(d,102.2,g.x+.35,g.y-.30,1);assert(d.composeDropDescentCommand()==mode);
+     odom(d,101.2,g.x+.35,g.y-.30,1);assert(d.composeDropDescentCommand()==mode);
      close(d.mavros_point_cmd.pose.position.z,.96);
-     ros::clock_sec=102.5;d.uav_pose.header.stamp=ros::Time::now();
+     ros::clock_sec=101.5;d.uav_pose.header.stamp=ros::Time::now();
      assert(d.composeDropDescentCommand()==mode);close(d.mavros_point_cmd.pose.position.z,.96);
      d.servo_alignment_context_.active=false;assert(!d.dropDescentControlActive());
      assert(d.composeDropDescentCommand()==1);
@@ -511,9 +591,8 @@ int main(int argc,char**argv){
    }
   }else if(name=="height_only_pre_descent"){
    capture(c);const auto g=c.compensated_fc_goal_.pose.position;
-   for(int i=0;i<=12;++i){odom(c,101+i*.1,g.x+.05,g.y,1);close(c.compensatedDropCommandHeight(),1);}
-   for(int i=0;i<=12;++i){odom(c,102.3+i*.1,g.x,g.y,1,.101);close(c.compensatedDropCommandHeight(),1);}
-   settle_before_descent(c,103.6);
+   for(int i=0;i<=12;++i){odom(c,101+i*.1,g.x+.061,g.y,1);close(c.compensatedDropCommandHeight(),1);}
+   odom(c,102.3,g.x+.059,g.y,1,.8);close(c.compensatedDropCommandHeight(),.40);
   }else if(name=="height_only_band"){
    capture(c);settle_before_descent(c,101);const auto g=c.compensated_fc_goal_.pose.position;
    int i=0;for(double z:{.349,.35,.40,.45,.451}){
@@ -765,11 +844,11 @@ int main(int argc,char**argv){
    capture(c);const auto g=c.compensated_fc_goal_.pose.position;
    CONFIGURED_DROP
    c.drop_release_window_=LandingHandoffStabilityWindow(c.drop_settle_config_);
-   close(c.drop_settle_config_.xy_tolerance_m,.06);
-   for(int i=0;i<3;++i){odom(c,101+i*.15625,g.x+.061,g.y,.35,.07);
+   close(c.drop_settle_config_.xy_tolerance_m,.10);
+   for(int i=0;i<3;++i){odom(c,101+i*.15625,g.x+.101,g.y,.35,.07);
     assert(c.executeDropAction(1)==DropActionResult::kPending&&!c.servo_action_attempted_&&t->calls==0);}
    // A single current sample is enough after the original visual capture.
-   odom(c,103,g.x+.055,g.y,.35,.20);
+   odom(c,103,g.x+.095,g.y,.35,.20);
    assert(c.executeDropAction(1)==DropActionResult::kPending&&c.servo_action_attempted_);
    finish(c,t);assert(c.executeDropAction(1)==DropActionResult::kSuccess&&t->calls==1);
   }else if(name=="height_config_compat"){
@@ -798,18 +877,18 @@ int main(int argc,char**argv){
    CONFIGURED_DROP
    odom(c,101,g.x,g.y,.40,.08);
    assert(c.compensatedDropSettled(true));
-   odom(c,101.01,g.x+.059,g.y,.40);
+   odom(c,101.01,g.x+.099,g.y,.40);
    assert(c.compensatedDropSettled(true));
-   odom(c,101.02,g.x+.061,g.y,.40);
+   odom(c,101.02,g.x+.101,g.y,.40);
    assert(!c.compensatedDropSettled(true));
    // Equality must not pass; use the measured error as the exact threshold.
    double measured=0;
    c.compensatedDropSettled(true,&measured);
    c.drop_settle_config_.xy_tolerance_m=measured;
    assert(!c.compensatedDropSettled(true));
-   c.drop_settle_config_.xy_tolerance_m=.06;
+   c.drop_settle_config_.xy_tolerance_m=.10;
    // Earlier height-only and later position-only satisfaction cannot latch.
-   odom(c,101.021,g.x+.07,g.y,.40);assert(!c.compensatedDropSettled(true));
+   odom(c,101.021,g.x+.11,g.y,.40);assert(!c.compensatedDropSettled(true));
    odom(c,101.022,g.x,g.y,.46);assert(!c.compensatedDropSettled(true));
    odom(c,101.03,g.x,g.y,.40,.081);
    assert(c.compensatedDropSettled(true));
@@ -1050,26 +1129,30 @@ class CompensatedDropGeometryTests(unittest.TestCase):
         result = subprocess.run([str(self.binary), name], capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_serial_circle_and_cross_require_one_second_horizontal_stability(self): self.run_case('serial_sequence')
+    def test_serial_circle_and_cross_enter_descent_on_first_valid_xy_sample(self): self.run_case('serial_sequence')
     def test_serial_service_requires_descent_entry_even_if_initial_height_is_in_window(self): self.run_case('serial_admission')
     def test_invalid_context_cancel_expired_motion_and_control_block_descent_entry(self): self.run_case('serial_invalid')
     def test_cancel_after_descent_uses_existing_hold_guard_and_never_releases(self): self.run_case('serial_cancel_after_descent')
     def test_new_action_resets_descent_phase_via_both_existing_reset_paths(self): self.run_case('serial_reset')
     def test_serial_default_and_explicit_compatibility_parameter(self): self.run_case('serial_config')
     def test_serial_entry_checks_actual_outlet_and_later_stale_motion_does_not_climb(self): self.run_case('serial_outlet')
-    def test_pre_descent_speed_violation_restarts_one_second(self): self.run_case('serial_speed_reset')
-    def test_pre_descent_four_cm_violation_restarts_one_second(self): self.run_case('serial_xy_reset')
-    def test_pre_descent_duplicate_samples_and_feedback_gap_do_not_finish_window(self): self.run_case('serial_duplicate_gap')
+    def test_pre_descent_does_not_wait_for_speed_duration_or_sample_count(self): self.run_case('serial_speed_reset')
+    def test_pre_descent_xy_violation_then_first_valid_sample_enters_descent(self): self.run_case('serial_xy_reset')
+    def test_pre_descent_duplicate_invalid_samples_do_not_help_but_fresh_frame_enters(self): self.run_case('serial_duplicate_gap')
     def test_pre_descent_does_not_gate_displacement_height_or_vertical_speed(self): self.run_case('serial_horizontal_only')
-    def test_pre_descent_four_cm_and_point_one_speed_are_inclusive(self): self.run_case('serial_exact_limits')
-    def test_pre_descent_checks_rotating_outlet_speed_as_well_as_fc_speed(self): self.run_case('serial_outlet_speed')
-    def test_pre_descent_invalid_control_stale_feedback_and_context_reset_partial_window(self): self.run_case('serial_invalid_window')
-    def test_pre_descent_partial_window_is_cleared_by_both_action_reset_paths(self): self.run_case('serial_partial_reset')
+    def test_pre_descent_standard_cross_and_unknown_strict_thresholds(self): self.run_case('serial_exact_limits')
+    def test_pre_descent_rotating_outlet_speed_is_diagnostic_only(self): self.run_case('serial_outlet_speed')
+    def test_pre_descent_invalid_control_stale_feedback_and_context_still_block(self): self.run_case('serial_invalid_window')
+    def test_pre_descent_both_reset_paths_require_new_freeze(self): self.run_case('serial_partial_reset')
+    def test_pre_descent_and_release_thresholds_separate_for_both_release_modes(self): self.run_case('serial_split_thresholds')
+    def test_pre_descent_class_parameters_validate_xy_freshness_only(self): self.run_case('serial_pre_parameters')
+    def test_pre_descent_keeps_its_independent_freshness_limit(self): self.run_case('serial_pre_freshness')
+    def test_release_standard_ten_cm_cross_six_cm_are_strict(self): self.run_case('serial_release_exact_limits')
     def test_three_descent_modes_keep_entry_gate_and_reset_transaction(self): self.run_case('serial_descent_modes')
     def test_independent_descent_rate_pause_floor_and_invalid_config(self): self.run_case('serial_descent_profile')
     def test_height_only_circle_and_cross_release_after_xy_rebound(self): self.run_case('height_only_rpc')
     def test_height_only_retains_height_freshness_context_control_and_permission_guards(self): self.run_case('height_only_guards')
-    def test_height_only_does_not_bypass_four_cm_point_one_speed_one_second_before_descent(self): self.run_case('height_only_pre_descent')
+    def test_height_only_does_not_bypass_independent_pre_descent_xy(self): self.run_case('height_only_pre_descent')
     def test_height_only_accepts_closed_height_band_despite_horizontal_error(self): self.run_case('height_only_band')
     def test_height_only_default_and_explicit_legacy_xy_mode(self): self.run_case('height_only_config')
     def test_bound_standard_red_cross_and_unknown_class_thresholds(self): self.run_case('class_thresholds')
@@ -1095,7 +1178,7 @@ class CompensatedDropGeometryTests(unittest.TestCase):
     def test_both_legacy_outer_gates_keep_original_distance_and_completed_guard(self): self.run_case('outer_legacy')
     def test_duplicate_stale_future_visual_frames_cannot_retarget(self): self.run_case('vision_replay')
     def test_six_cm_error_blocks_real_rpc_submission(self): self.run_case('xy')
-    def test_configured_six_cm_releases_immediately_without_speed_gate(self): self.run_case('configured_settle')
+    def test_configured_ten_cm_releases_immediately_without_speed_gate(self): self.run_case('configured_settle')
     def test_closed_height_band_accepts_035_040_045_and_rejects_outside(self): self.run_case('height_band')
     def test_release_floor_parameter_defaults_to_setpoint_for_legacy_config(self): self.run_case('height_config_compat')
     def test_current_xy_and_control_gate_with_speed_diagnostics_only(self): self.run_case('current_limits')

@@ -104,7 +104,7 @@ EXTRA_CASES = r'''
   for(int i=0;i<30;++i){narrowSample(c,120+i*.1,1.,.08,0);
    close(c.compensatedDropCommandHeight(),1.);assert(!c.drop_descent_started_);
    assert(!c.compensatedDropSettled(true,nullptr,nullptr,false));}
-  for(int i=0;i<=12;++i){narrowSample(c,123+i*.1,1.,0,0);c.compensatedDropCommandHeight();}
+  narrowSample(c,123,1.,0,.8);close(c.compensatedDropCommandHeight(),.4);
   assert(c.drop_descent_started_);narrowSample(c,125,.4);assert(c.compensatedDropSettled(true));
  }else if(name=="narrow_normal_disabled"){
   narrowPrepare(c);narrowSample(c,101,.4,0,.8);
@@ -175,7 +175,7 @@ class NarrowDropTimeout(unittest.TestCase):
     def test_standard_timeout_release_once_and_normal_ack_recovery(self): self.run_case('narrow_circle')
     def test_red_cross_timeout_release_once_and_normal_ack_recovery(self): self.run_case('narrow_cross')
     def test_freeze_descent_permission_identity_deadline_feedback_height_guards(self): self.run_case('narrow_guards')
-    def test_timeout_never_skips_original_pre_descent_xy_window(self): self.run_case('narrow_serial')
+    def test_timeout_never_skips_independent_pre_descent_xy(self): self.run_case('narrow_serial')
     def test_normal_precision_immediate_and_disabled_timeout_restores_xy(self): self.run_case('narrow_normal_disabled')
     def test_clock_rollback_latches_fallback_off_but_normal_precision_remains(self): self.run_case('narrow_clock')
     def test_cancellation_and_late_heartbeat_do_not_resurrect_timeout(self): self.run_case('narrow_cancel')

@@ -406,3 +406,5 @@ PYTHONPATH=/usr/lib/python3/dist-packages python -m unittest discover -s tools/f
 该入口仍启动同一标定launch。默认0928工程的 `connection.env_script` 保留。
 若连接独立工程根目录，在连接设置中将此项改为
 `deployment/competition/environment.sh`，同时填写实际工程根目录；不自动切根目录。
+
+H mode4候选可通过命令预览/配置检查请求的 `landing_config` 路径显式叠加，仅模块03/04/08与正赛支持；默认选项保持。[覆盖与参数说明](../../deployment/competition/candidates/README.md)。候选使用冻结XY＋负VZ，真实新鲜落地后普通disarm，本轮未部署或动态验收。

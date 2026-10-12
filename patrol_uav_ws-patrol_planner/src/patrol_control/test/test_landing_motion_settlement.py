@@ -222,10 +222,17 @@ class ProductionHSettlementTests(unittest.TestCase):
         prefix = prefix.replace('    bool highLandingAlignmentReady() { return false; }\n', '')
         prefix = '#include "patrol_control/landing_high_alignment.h"\n' + prefix
         prefix = prefix.replace('#include <array>', '#include <array>\n#include <Eigen/Core>\n#include "patrol_control/landing_handoff_stability.h"\nusing patrol_control::LandingHandoffSample;')
-        prefix = prefix.replace('bool isZero() const', 'double toSec() const { return value; }\n    bool isZero() const')
+        prefix = prefix.replace('namespace Eigen { struct Vector3d {}; }\n', '')
+        prefix = prefix.replace('    struct { struct { struct { Position position; } pose; } pose; } motion_odom_;\n', '')
+        prefix = prefix.replace('    bool freshMotion(Eigen::Vector3d*, Eigen::Vector3d*) { return motion_fresh_; }\n', '')
         signatures = (
             'bool LLController::externalLandingMarkFresh(',
             'bool LLController::externalLandingControlReady(',
+            'bool LLController::externalLandingOffboardStateReady(',
+            'bool LLController::externalLandingOffboardDescentReady(',
+            'void LLController::externalLandingOffboardTick(',
+            'void LLController::externalLandingExtendedStateCallback(',
+            'void LLController::publishExternalLandingOffboardSetpoint(',
             'void LLController::externalLandingStateCallback(',
             'void LLController::publishExternalLandingHandoff(',
             'void LLController::clearExternalLandingState(',

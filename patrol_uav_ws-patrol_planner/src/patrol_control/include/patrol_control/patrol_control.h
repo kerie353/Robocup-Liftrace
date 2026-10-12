@@ -12,6 +12,10 @@
 #include "patrol_control/landing_high_alignment.h"
 #include "patrol_control/drop_pre_descent_stability.h"
 #include "patrol_control/drop_descent_profile.h"
+#include "patrol_control/offboard_landing.h"
+#include "patrol_control/async_landing_disarm.h"
+#include <mavros_msgs/ExtendedState.h>
+#include <mavros_msgs/PositionTarget.h>
 #include <nav_msgs/Odometry.h>
 #include <uav_vision/DropAlignmentFeedback.h>
 
@@ -200,6 +204,23 @@ private:
     ros::Subscriber mission_command_sub_;
     ros::Subscriber landing_detections_sub_;
     ros::Subscriber external_landing_state_sub_;
+    ros::Subscriber external_landing_extended_state_sub_;
+    ros::ServiceClient external_landing_disarm_client_;
+    AsyncLandingDisarm external_landing_disarm_worker_;
+    OffboardLandingConfig offboard_landing_config_;
+    OffboardGroundConfirmation offboard_ground_confirmation_;
+    std::string external_landing_extended_state_topic_ = "/mavros/extended_state";
+    std::string external_landing_disarm_service_ = "/mavros/cmd/arming";
+    ros::Time external_landing_last_disarm_attempt_;
+    ros::Time external_landing_disarmed_pending_at_;
+    ros::Publisher external_landing_offboard_setpoint_pub_;
+    std::string external_landing_offboard_setpoint_topic_ = "/navigation/landing_setpoint_touchdown";
+    bool external_landing_offboard_floor_reached_ = false;
+    bool externalLandingOffboardDescentReady();
+    void publishExternalLandingOffboardSetpoint();
+    bool externalLandingOffboardStateReady(const ros::Time& now) const;
+    void externalLandingOffboardTick();
+    void externalLandingExtendedStateCallback(const mavros_msgs::ExtendedState::ConstPtr& msg);
     // 舵机控制发布器
     ros::Publisher servo1_pub_;
     ros::Publisher servo2_pub_;

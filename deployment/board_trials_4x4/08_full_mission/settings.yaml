@@ -1,6 +1,9 @@
 mode: high_view_full
 low_agl: 1.4
 high_agl: 2.6
+# 投递下降模式；不影响H降落模式。
+drop_descent_mode: 1
+drop_descent_speed_mps: 0.20
 drop_agl: 0.30
 release_min_agl: 0.28
 release_max_agl: 0.35
@@ -22,6 +25,11 @@ motion_optimization:
 # Promoted from the operator-confirmed H flight on 2026-10-06.
 # Pilot completes final descent after visual alignment and POSCTL handoff.
 landing_handoff_mode: POSCTL
+# low preserves current capture; high: <=6cm, <0.1m/s for 1s; descent mode is independent.
+landing_alignment_mode: low
+# 1: XYZ; 2: frozen H XY + Z ramp; 3: VX=VY=0 + Z ramp.
+landing_descent_mode: 1
+landing_descent_speed_mps: 0.20
 
 # Per-motion action budget, including merged corridor segments (seconds).
 motion_action_timeout: 60.0
@@ -29,12 +37,12 @@ motion_action_timeout: 60.0
 # 来源 073c8f19：低位 H POSCTL 停稳参数；现场其他参数保持本分支值。
 landing_posctl:
   target_agl: 0.35
-  trigger_agl: 0.37
+  trigger_agl: 0.40
   xy_tolerance_m: 0.05
-  height_tolerance_m: 0.02
-  capture_height_tolerance_m: 0.10  # 仅观察高位；低位高度容差仍为 ±0.02m。
-  max_horizontal_speed_mps: 0.08
-  max_vertical_speed_mps: 0.10
+  height_tolerance_m: 0.05
+  capture_height_tolerance_m: 0.10  # Independent legacy capture-height tolerance.
+  max_horizontal_speed_mps: 0.10
+  max_vertical_speed_mps: 0.10 # Compatibility field; not checked during H handoff.
   stable_duration_sec: 0.15
   max_odom_age_sec: 0.2
   max_sample_gap_sec: 0.2

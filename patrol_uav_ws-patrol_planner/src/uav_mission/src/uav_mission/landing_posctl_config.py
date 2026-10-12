@@ -1,7 +1,7 @@
 """硬件配置生成器共用的 POSCTL 低位 H 交接参数。
 
-H 捕获保持原 8cm、10 帧新鲜图像与位置冻结，不增加高位运动窗口；
-独立高位高度容差仍保留，低位以安全高度带和连续新鲜反馈允许受控缓降。
+低位默认保留原 8cm、10 帧捕获；高位模式采用 6cm、<0.1m/s 连续 1s。
+低位交接允许 0.30–0.40m、<=0.1m/s，不检查竖直速度。
 不使用下降中的残缺图形重定位。AUTO.LAND 保持原 0.40/0.55m 离地高度。
 """
 import math
@@ -9,12 +9,12 @@ import math
 
 DEFAULTS = dict(
     target_agl=0.35,
-    trigger_agl=0.37,
+    trigger_agl=0.40,
     xy_tolerance_m=0.05,
-    height_tolerance_m=0.02,
+    height_tolerance_m=0.05,
     capture_height_tolerance_m=0.10,
-    max_horizontal_speed_mps=0.08,
-    max_vertical_speed_mps=0.10,
+    max_horizontal_speed_mps=0.10,
+    max_vertical_speed_mps=0.10,  # Legacy/capture compatibility; ignored for H handoff.
     stable_duration_sec=0.15,
     max_odom_age_sec=0.2,
     max_sample_gap_sec=0.2,
@@ -22,7 +22,24 @@ DEFAULTS = dict(
 )
 
 
+def landing_descent_parameters(settings):
+    mode = settings.get('landing_descent_mode', 1)
+    speed = settings.get('landing_descent_speed_mps', 0.20)
+    if type(mode) is not int or mode not in (1, 2, 3):
+        raise ValueError('landing_descent_mode must be 1, 2 or 3')
+    if (isinstance(speed, bool) or not isinstance(speed, (int, float)) or
+            not math.isfinite(speed) or not 0.0 < speed <= 1.0):
+        raise ValueError('landing_descent_speed_mps must be in (0, 1]')
+    return dict(mode=mode, speed_mps=float(speed), max_step_dt_sec=0.20)
+
+
 def validate_landing_posctl(settings):
+    landing_descent_parameters(settings)
+    mode = settings.get('landing_alignment_mode', 'low')
+    if mode not in ('low', 'high'):
+        raise ValueError('landing_alignment_mode must be low or high')
+    if mode == 'high' and settings.get('landing_handoff_mode', 'AUTO.LAND') != 'POSCTL':
+        raise ValueError('high H alignment requires POSCTL')
     supplied = settings.get('landing_posctl', {})
     if not isinstance(supplied, dict) or set(supplied) - set(DEFAULTS):
         raise ValueError('invalid landing_posctl fields')

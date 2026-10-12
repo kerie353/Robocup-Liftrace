@@ -9,6 +9,9 @@
 #include "patrol_control/near_wall_align.h"
 #include "patrol_control/drop_slot_geometry.h"
 #include "patrol_control/landing_handoff_stability.h"
+#include "patrol_control/landing_high_alignment.h"
+#include "patrol_control/drop_pre_descent_stability.h"
+#include "patrol_control/drop_descent_profile.h"
 #include <nav_msgs/Odometry.h>
 #include <uav_vision/DropAlignmentFeedback.h>
 
@@ -123,6 +126,11 @@ private:
     bool compensated_alignment_enabled_ = true;
     bool compensated_goal_valid_ = false, compensated_goal_frozen_ = false;
     bool drop_compensate_before_descent_ = true, drop_descent_started_ = false;
+    bool drop_release_height_only_ = true;
+    DropDescentConfig drop_descent_config_;
+    DropDescentProfile drop_descent_profile_;
+    ros::Publisher drop_vertical_cmd_pub_;
+    bool dropDescentControlActive() const;
     bool compensated_target_outside_boundary_ = false;
     geometry_msgs::PoseStamped compensated_fc_goal_;
     geometry_msgs::Point compensated_target_center_;
@@ -131,6 +139,8 @@ private:
     LandingHandoffStabilityConfig drop_settle_config_, landing_settle_config_, landing_capture_config_;
     double drop_red_cross_xy_tolerance_m_ = 0.04;
     LandingHandoffStabilityWindow drop_capture_window_, drop_release_window_;
+    DropPreDescentStabilityConfig drop_pre_descent_config_;
+    DropPreDescentStabilityWindow drop_pre_descent_window_;
     LandingHandoffStabilityWindow landing_capture_window_, landing_handoff_window_;
     void motionOdomCallback(const nav_msgs::Odometry::ConstPtr& msg);
     const char* motionFeedbackStatus() const;
@@ -289,6 +299,13 @@ private:
     bool external_planner_height_hold_active_ = false;
     geometry_msgs::PoseStamped external_planner_height_hold_;
     std::string external_landing_frame_ = "camera_init";
+    std::string external_landing_alignment_mode_ = "low";
+    LandingHighAlignmentWindow landing_high_alignment_window_;
+    ros::Publisher landing_vertical_cmd_pub_;
+    // Reuse only the mathematical ramp; H has its own config and transaction.
+    DropDescentConfig landing_descent_config_;
+    DropDescentProfile landing_descent_profile_;
+    bool highLandingAlignmentReady();
     double external_landing_capture_height_ = 0.75;
     double external_landing_watchdog_timeout_sec_ = 120.0;
     double external_landing_mark_max_age_sec_ = 0.5;

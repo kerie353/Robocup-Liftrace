@@ -12,9 +12,10 @@ from uav_high_view.survey_policy import SurveyPolicy
 from uav_mission.execution_speed import FollowingSpeed
 from uav_mission.corridor_speed import CorridorSpeedConfig
 from uav_mission.motion_optimization import MotionOptimization, optimize_post_route
-from uav_mission.landing_posctl_config import validate_landing_posctl, landing_control_parameters
+from uav_mission.landing_posctl_config import validate_landing_posctl, landing_control_parameters, landing_descent_parameters
 from uav_mission.navigation_recovery_config import recovery_parameters
 from uav_mission.drop_height_config import release_heights
+from uav_mission.drop_descent_config import drop_descent_parameters
 
 
 def apply_overrides(settings, motion=None, columns=None, motion_timeout=None, resume=None):
@@ -34,6 +35,7 @@ def apply_overrides(settings, motion=None, columns=None, motion_timeout=None, re
 
 
 def validate(settings, flight=False):
+    drop_descent_parameters(settings)
     if not isinstance(settings,dict):raise ValueError('field configuration must be an object')
     release_heights(settings)
     lead=settings.get('takeoff_z_lead_m',0.)
@@ -199,6 +201,7 @@ def generate(root,out,settings,fc_xyz,rig):
     control['switch'].update(auto_land=True,flag_landing_detect=1)
     control['drop_system'].update(enable_drop=True,release_setpoint_height=drop,
         release_min_height=ground+release_min,height_threshold=ground+release_max)
+    control['drop_system']['descent'] = drop_descent_parameters(settings)
     # 两套表均保留实测值，表示 FC 中心到投口的机体系杆臂，FLU 为前、左、上。
     # 控制器减去经完整机体姿态旋转后的杆臂，不能按固定地图偏移直接相加。
     control['drop_system'].update(slot_offset_semantics='body_flu_lever_arm', compensated_alignment=True)
@@ -209,6 +212,8 @@ def generate(root,out,settings,fc_xyz,rig):
     control['external_landing'].update(frame=rig['mission_frame'],capture_height=capture,auto_land_height=handoff_z,detections_topic='/uav_vision/detections_mapped',handoff_mode=settings.get('landing_handoff_mode','AUTO.LAND'))
     if posctl_stability is not None:
         control['external_landing']['posctl'] = posctl_stability
+    control['external_landing']['alignment_mode'] = settings.get('landing_alignment_mode', 'low')
+    control['external_landing']['descent'] = landing_descent_parameters(settings)
     overrides={
         '/landing_detector/landing_enable_h_stroke_fallback':settings['landing_enable_h_stroke_fallback'],
         '/fast_planner_node/sdf_map/resolution':.10,

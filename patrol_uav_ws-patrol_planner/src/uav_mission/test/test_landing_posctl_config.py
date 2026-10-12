@@ -12,7 +12,7 @@ TRIAL = ROOT / 'deployment/board_trials_4x4/common/uav_board_trials'
 sys.path[:0] = [str(PKG / 'src'), str(ROOT / 'vision_ws/src/uav_high_view/src'),
                str(TRIAL / 'scripts')]
 from uav_mission.landing_posctl_config import (DEFAULTS, validate_landing_posctl,
-                                              landing_control_parameters)
+                                              landing_control_parameters, landing_descent_parameters)
 from uav_mission.competition_config import generate as competition_generate
 from trial_config import generate as trial_generate, apply_site_profile, validate_settings
 
@@ -23,6 +23,8 @@ class LowHConfigTests(unittest.TestCase):
         self.settings = yaml.safe_load((ROOT / 'deployment/competition/field.example.yaml').read_text())
         # H configuration fixtures isolate motion policy and need no wall-plane measurements.
         self.settings.setdefault('motion_optimization', {})['enabled'] = False
+        # Isolate H height bounds from the independent delivery local-Z >5cm gate.
+        self.settings.update(drop_agl=.40, release_min_agl=.37, release_max_agl=.45)
         self.settings.update(site_confirmed=True,
             corridor_waypoints=[dict(x=6.7,y=4.,agl=1.4),dict(x=6.7,y=4.,agl=.9),
                                 dict(x=8.3,y=4.,agl=.9),dict(x=8.3,y=-4.,agl=.9)],
@@ -36,11 +38,12 @@ class LowHConfigTests(unittest.TestCase):
 
     def check_profile(self, ref, control, mode):
         landing = control['external_landing']
-        target, trigger = (.35, .37) if mode == 'POSCTL' else (.40, .55)
+        target, trigger = (.35, .40) if mode == 'POSCTL' else (.40, .55)
         self.assertAlmostEqual(control['land_height'] - ref['ground_z'], target)
         self.assertAlmostEqual(landing['auto_land_height'] - ref['ground_z'], trigger)
         self.assertEqual(landing['alignment_tolerance'], .08)
         self.assertEqual(landing['stable_frames'], 10)
+        self.assertEqual(landing['alignment_mode'], 'low')
         self.assertEqual(landing['handoff_mode'], mode)
         if mode == 'POSCTL':
             self.assertEqual(landing['posctl'], {k:v for k,v in DEFAULTS.items()
@@ -64,6 +67,9 @@ class LowHConfigTests(unittest.TestCase):
                 settings.update(corridor_waypoints=[dict(x=1.,y=0.,agl=.9),
                                                      dict(x=2.,y=0.,agl=.9)],
                                 landing_xy=[2.,0.])
+            # Keep this H-only fixture independent of the board's lower delivery window.
+            if name == '08_full_mission':
+                settings.update(drop_agl=.40, release_min_agl=.37, release_max_agl=.45)
             for mode in ('POSCTL', 'AUTO.LAND'):
                 with self.subTest(name=name, mode=mode):
                     settings['landing_handoff_mode'] = mode
@@ -83,7 +89,8 @@ class LowHConfigTests(unittest.TestCase):
                 expected = dict(DEFAULTS)
                 if file.name == 'field_20261007_validated.yaml':
                     # This confirmed field file is the preserved historical snapshot.
-                    expected.update(max_horizontal_speed_mps=.03,
+                    expected.update(trigger_agl=.37, height_tolerance_m=.02,
+                                    max_horizontal_speed_mps=.03,
                                     max_vertical_speed_mps=.05, stable_duration_sec=.5)
                 self.assertEqual(settings['landing_posctl'], expected)
 
@@ -151,7 +158,7 @@ class LowHConfigTests(unittest.TestCase):
         settings = dict(landing_capture_agl=1.2, landing_handoff_mode='POSCTL')
         target, trigger, stable = landing_control_parameters(settings, -.22, .22)
         self.assertAlmostEqual(target, .13)
-        self.assertAlmostEqual(trigger, .15)
+        self.assertAlmostEqual(trigger, .18)
         self.assertEqual(stable['min_samples'], 3)
         settings['landing_handoff_mode'] = 'AUTO.LAND'
         target, trigger, stable = landing_control_parameters(settings, -.22, .22)
@@ -171,6 +178,56 @@ class LowHConfigTests(unittest.TestCase):
         non_h['landing_posctl'] = {}
         with self.assertRaisesRegex(ValueError, 'visual H landing'):
             validate_settings(non_h)
+
+    def test_high_switch_reaches_both_generators_and_preserves_low_parameters(self):
+        trial = yaml.safe_load((ROOT / 'deployment/board_trials_4x4/03_h_landing/settings.yaml').read_text())
+        for function, settings in ((trial_generate, trial), (competition_generate, self.settings)):
+            _, low = self.generated(function, settings)
+            high_settings = copy.deepcopy(settings)
+            high_settings['landing_alignment_mode'] = 'high'
+            _, high = self.generated(function, high_settings)
+            self.assertEqual(high['external_landing']['alignment_mode'], 'high')
+            high['external_landing']['alignment_mode'] = 'low'
+            self.assertEqual(high, low)
+        apply_site_profile(trial, {'landing_alignment_mode': 'high'})
+        validate_settings(trial)
+        for mode in ('invalid', None, True):
+            trial['landing_alignment_mode'] = mode
+            with self.assertRaises(ValueError): validate_settings(trial)
+        trial.update(landing_alignment_mode='high', landing_handoff_mode='AUTO.LAND')
+        with self.assertRaisesRegex(ValueError, 'requires POSCTL'): validate_settings(trial)
+        non_h = yaml.safe_load((ROOT / 'deployment/board_trials_4x4/01_visual_interrupt/settings.yaml').read_text())
+        with self.assertRaises(ValueError): apply_site_profile(non_h, {'landing_alignment_mode': 'high'})
+
+
+    def test_descent_modes_are_independent_of_capture_and_delivery(self):
+        trial = yaml.safe_load((ROOT / 'deployment/board_trials_4x4/03_h_landing/settings.yaml').read_text())
+        for function, settings in ((trial_generate, trial), (competition_generate, self.settings)):
+            _, base = self.generated(function, settings)
+            for alignment in ('low', 'high'):
+                for mode in (1, 2, 3):
+                    configured = copy.deepcopy(settings)
+                    configured.update(landing_alignment_mode=alignment, landing_descent_mode=mode,
+                                      landing_descent_speed_mps=.25)
+                    _, actual = self.generated(function, configured)
+                    self.assertEqual(actual['external_landing']['descent'],
+                                     dict(mode=mode, speed_mps=.25, max_step_dt_sec=.20))
+                    actual['external_landing']['alignment_mode'] = base['external_landing']['alignment_mode']
+                    actual['external_landing']['descent'] = base['external_landing']['descent']
+                    self.assertEqual(actual, base)
+        apply_site_profile(trial, dict(landing_descent_mode=3, landing_descent_speed_mps=.3))
+        validate_settings(trial)
+        non_h = yaml.safe_load((ROOT / 'deployment/board_trials_4x4/01_visual_interrupt/settings.yaml').read_text())
+        with self.assertRaises(ValueError): apply_site_profile(non_h, dict(landing_descent_mode=3))
+        non_h['landing_descent_mode'] = 3
+        with self.assertRaises(ValueError): validate_settings(non_h)
+
+    def test_descent_invalid_values_and_defaults(self):
+        self.assertEqual(landing_descent_parameters({}), dict(mode=1, speed_mps=.20, max_step_dt_sec=.20))
+        for mode in (True, 0, 4, '2', 2.0):
+            with self.assertRaises(ValueError): landing_descent_parameters(dict(landing_descent_mode=mode))
+        for speed in (True, 0, -.1, 1.01, float('nan'), float('inf'), '0.2'):
+            with self.assertRaises(ValueError): landing_descent_parameters(dict(landing_descent_speed_mps=speed))
 
 
 if __name__ == '__main__':

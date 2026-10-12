@@ -40,6 +40,8 @@ struct LandingHandoffSample {
     double vertical_speed_mps = 0.0;
     // Low H handoff permits controlled descent in the configured safe height band.
     bool controlled_descent = false;
+    // Only the H low handoff opts out; delivery and capture retain their gate.
+    bool check_vertical_speed = true;
     bool alignment_latched = false;
     bool control_ready = false;
     bool feedback_valid = false;
@@ -97,7 +99,8 @@ public:
             return reject("height_error");
         if (sample.horizontal_speed_mps > config_.max_horizontal_speed_mps)
             return reject("horizontal_speed");
-        if (std::abs(sample.vertical_speed_mps) > config_.max_vertical_speed_mps)
+        if (sample.check_vertical_speed &&
+            std::abs(sample.vertical_speed_mps) > config_.max_vertical_speed_mps)
             return reject("vertical_speed");
         if (active_ && (now_sec < last_now_ ||
                         sample.source_stamp_sec < last_source_ ||

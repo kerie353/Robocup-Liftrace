@@ -70,25 +70,25 @@ class TakeoffSettings(unittest.TestCase):
         rospack=rospkg.RosPack(ros_paths=[str(BASE/'common'),str(ROOT/'vision_ws/src'),str(ROOT/'patrol_uav_ws-patrol_planner/src'),'/opt/ros/noetic/share'])
         for profile in ('limited','competition'):
             baseline=None
-            for lead in (.6,0.,.4):
+            for lead in (None,.6,0.,.4):
                 with self.subTest(profile=profile,lead=lead),tempfile.TemporaryDirectory() as path:
                     s=trial_settings(BASE/'08_full_mission/settings.yaml')
                     apply_speed_profile(ROOT,s,'full_mission',profile)
-                    s['takeoff_z_lead_m']=lead
+                    if lead is not None:s['takeoff_z_lead_m']=lead
                     reference=trial_generate(ROOT,path,s,(0.,0.,0.),RIG)
                     args=['enable_control_output:=true','simulation:=false','mode:=high_view_full','model_path:=/offline-test.rknn','generated_dir:='+path,'ground_z:='+str(reference['ground_z']),'low_z:='+str(reference['low_z']),'cruise_speed:='+str(s['cruise_speed']),'cruise_acceleration:='+str(s['cruise_acceleration'])]
                     config=roslaunch.config.ROSLaunchConfig()
                     with patch.object(roslaunch.substitution_args,'_rospack',rospack):
                         roslaunch.xmlloader.XmlLoader().load(str(scripts.parent/'launch/application.launch'),config,argv=args,verbose=False)
                     values={key:param.value for key,param in config.params.items()}
-                    self.assertEqual(values['/takeoff_z_lead_m'],lead)
+                    self.assertEqual(values['/takeoff_z_lead_m'],0. if lead is None else lead)
                     self.assertEqual(values['/px4_max_distance'],.4 if profile=='competition' else .25)
                     if baseline is None:baseline=values
                     else:
                         changed={key for key in baseline.keys() | values.keys() if baseline.get(key)!=values.get(key)}
                         # Generated temporary paths are expected to differ between loads.
                         changed={key for key in changed if not (isinstance(values.get(key),str) and path in values[key])}
-                        self.assertEqual(changed,{'/takeoff_z_lead_m'})
+                        self.assertEqual(changed,{'/takeoff_z_lead_m'} if lead else set())
 
     def test_invalid_settings_are_rejected_before_launch(self):
         for lead in (-1.,.39,.600001,1.,float('nan'),float('inf'),True,'0.6',None):

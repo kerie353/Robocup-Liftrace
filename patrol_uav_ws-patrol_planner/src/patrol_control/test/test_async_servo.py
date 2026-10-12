@@ -138,8 +138,6 @@ public:
     bool compensated_alignment_enabled_=true, geometry_ready=true;
     // Async-only fixture uses explicit simultaneous compatibility mode.
     bool drop_compensate_before_descent_=false, drop_descent_started_=false;
-    bool forcedDropAuthorized() const { return false; }
-    bool forcedDropControlReady() const { return true; }
     bool compensatedDropSettled(bool) { return geometry_ready; }
     void publishCompensatedAlignment() {}
     std::string external_landing_handoff_mode_="AUTO.LAND";
@@ -160,7 +158,7 @@ public:
     void servoAlignmentContextCallback(const uav_vision::AlignmentTargetContext::ConstPtr&);
     enum { Run_point, Aligning };
     int Drone_mode=Aligning;
-    ros::Time detection_start_time;
+    ros::Time detection_start_time, drop_alignment_started_;
     double waypoint_adjust_max_second_threshould=15;
     Pose mavros_point_cmd;
     Publisher mavros_point_cmd_pub;

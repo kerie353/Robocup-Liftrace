@@ -1,7 +1,3 @@
-# 普通许可保持短时有效；严格上下文投递另有以下强制投递超时。
-drop_timeout:
-  enabled: true
-  lock_timeout_sec: 20.0
 evidence_timeout: 0.50       # release_evidence 最大年龄 [s]
 pose_timeout: 0.50           # 飞机位姿最大年龄 [s]
 control_state_timeout: 0.50  # 旧 patrol_control 状态最大年龄 [s]

@@ -131,6 +131,10 @@ private:
     bool compensated_goal_valid_ = false, compensated_goal_frozen_ = false;
     bool drop_compensate_before_descent_ = true, drop_descent_started_ = false;
     bool drop_release_height_only_ = true;
+    bool drop_release_timeout_enabled_ = true;
+    double drop_release_timeout_sec_ = 20.0;
+    ros::Time drop_alignment_started_, drop_timeout_last_check_;
+    bool drop_timeout_clock_invalid_ = false;
     DropDescentConfig drop_descent_config_;
     DropDescentProfile drop_descent_profile_;
     ros::Publisher drop_vertical_cmd_pub_;
@@ -153,6 +157,7 @@ private:
                      const char** rejection = nullptr) const;
     bool setCompensatedDropTarget(geometry_msgs::PoseStamped* target);
     double compensatedDropXYTolerance() const;
+    bool compensatedDropTimeoutReady();
     bool compensatedDropSettled(bool release, double* error = nullptr,
                                 double* speed = nullptr, bool require_release_height = true);
     double compensatedDropCommandHeight();
@@ -532,11 +537,6 @@ private:
     bool DynamicProcess();
 
     // 投递相关函数
-    bool forcedDropAuthorized() const;
-    bool forcedDropControlReady() const;
-    bool forcedDropTick();
-    bool forced_drop_active_ = false;
-    geometry_msgs::PoseStamped forced_drop_hold_;
     DropActionResult executeDropAction(int servo_id);  // 执行投递动作
     void applyDropSlotOffset(int servo_id, bool dynamic_target);
     bool checkDropCondition();                 // 检查投递条件

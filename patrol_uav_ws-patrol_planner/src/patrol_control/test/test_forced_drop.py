@@ -1,161 +1,185 @@
-"""Compile production forced tick and RPC admission with transport doubles."""
+"""Continuous production release/ACK tests shared by B and trial descent.
+
+Reuse the geometry fixture; compile this checkout's controller bodies with
+UBSan. ROS time/transport boundaries are doubles. No nodes or actuators.
+"""
 from pathlib import Path
-import subprocess
-import tempfile
-import unittest
 import sys
-sys.path.insert(0,str(Path(__file__).resolve().parent))
+import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import test_compensated_drop_geometry as geometry
 from test_async_servo import method
-P=Path(__file__).resolve().parents[1]
-PROGRAM=r'''
-#include "patrol_control/drop_action.h"
-#include <cassert>
-#include <string>
-#include <functional>
-#define ROS_WARN(...) ((void)0)
-#define ROS_INFO(...) ((void)0)
-namespace Eigen {struct Vector3d {};}
-namespace ros {
-struct Time {double value=100;static Time now(){return {};}bool isZero() const{return value==0;}};
-bool operator>(Time a,Time b){return a.value>b.value;}
-bool operator<=(Time a,Time b){return a.value<=b.value;}
-struct ServiceClient {template<class T>bool call(T&){return true;}};
+
+EXTRA_MEMBERS = r'''
+ struct AlignCommand {ros::Header header; geometry_msgs::PoseStamped goal;
+  unsigned int target_id=7;std::string target_class="panzer";};
+ enum Task {MAIN_MISSION,CROSS_MISSION};Task current_task_type=MAIN_MISSION;
+ enum PointMode {Nothing_point,Detect_point};PointMode Point_mode=Nothing_point;
+ bool external_landing_auto_land_requested_=false,external_planner_height_hold_active_=false;
+ bool external_waiting_for_motion_=false,have_planner_cmd=true,temp_storage=false;
+ bool cross_drop_completed=false,cross_mission_completed=false;
+ bool cross_found_=false,cross_detection_active_=false,tank_mission_completed=false,tank_found_=false,mission_interrupted=false;
+ double time_temp=0,external_standard_recovery_setpoint_height_=1.2;
+ double external_cross_recovery_setpoint_height_=1.15,external_recovery_height_=1.;
+ ros::Time servo_alignment_stamp_;
+ geometry_msgs::PoseStamped last_mavros_point_cmd;
+ std::vector<std::string> goal;
+ int detect_control_pub_=0;
+ void clearExternalLandingState(bool){}
+ bool isQuaternionNormalized(const geometry_msgs::Quaternion&q){return std::abs(q.w*q.w+q.x*q.x+q.y*q.y+q.z*q.z-1)<.01;}
+ template<class T>void publishLegacyVisionControl(int,const T&){}
+ void acceptAlign(const AlignCommand*msg){ALIGN_BODY}
+ void cleanupAfterCrossDrop();
+ bool recoverCircle(){CIRCLE_RECOVERY return false;}
+ bool recoverCross(){CROSS_RECOVERY return false;}
+ void finishAlignment(bool align_done){struct {bool data=false;}detect_enable_msg; EXTERNAL_DONE}
+'''
+
+EXTRA_FUNCTIONS = r'''
+void narrowPrepare(LLController&c,bool cross=false){
+ ros::clock_sec=100.;NORMAL_XY_MODE
+ c.drop_compensate_before_descent_=false;
+ c.current_align_mode_=cross?"drop_cross":"drop_circle";
+ c.servo_alignment_context_.align_mode=c.current_align_mode_;
+ c.servo_alignment_context_.semantic_target_class=cross?"red_cross":"panzer";
+ c.servo_alignment_target_class_=c.servo_alignment_context_.semantic_target_class;
+ c.current_task_type=cross?LLController::CROSS_MISSION:LLController::MAIN_MISSION;
+ c.drop_alignment_started_=c.drop_timeout_last_check_=ros::Time(100);
+ odom(c,100,2,3,1);auto p=center(100);assert(c.setCompensatedDropTarget(&p));
+ c.waypoint_mark_point=c.cross_mark_point=p;c.have_waypoint_mark=!cross;c.have_cross_mark=cross;
+ assert(c.freezeCompensatedDropTarget());
+ close(c.compensatedDropCommandHeight(),.4);assert(c.drop_descent_started_);
 }
-struct Pose {struct {double x=1,y=2,z=1.4;} position;};
-struct PoseStamped {Pose pose;};
-namespace patrol_control {
-struct ServoAction {
- struct Request {
-  std::string permission_epoch,mission_id,target_class,align_mode;
-  int permission_revision=1,request_id=0,payload_slot=1,decision_seq=1,attempt=1,target_id=7;
-  ros::Time target_first_seen;
- } request;
- struct Response {} response;
-};
-struct Servo {struct {int req;} request;struct{bool res=true;} response;};
-DropActionResult classifyServoAction(ServoAction::Request,bool,ServoAction::Response){return DropActionResult::kSuccess;}
-struct AsyncServo {
- using Execute=std::function<DropActionResult(int)>;int calls=0;
- bool submit(int,int,double,Execute){++calls;return true;}
-};
-struct Context {
- bool active=true,has_target=true;
- std::string mission_id="mission",semantic_target_class="panzer",align_mode="drop_circle";
- int decision_seq=1,attempt=1,semantic_target_id=7,payload_slot=1;
- ros::Time semantic_target_first_seen,deadline{190};
-};
-struct Permission {std::string reason="forced_drop_lock_timeout",permission_epoch="epoch";int permission_revision=1;};
-struct Profile {bool was_reset=false;void reset(){was_reset=true;}};
-bool nearWallAlignReleaseAllowed(bool inside,PoseStamped){return inside;}
-class LLController {
-public:
- enum Mode {Aligning,Run_point,Land};enum Task {MAIN_MISSION,CROSS_MISSION};
- Mode Drone_mode=Aligning;Task current_task_type=MAIN_MISSION;
- bool external_mission_mode_=true,require_vision_release_permission_=true;
- bool permission_fresh=true,flight_ready=true,motion_fresh=true,near_wall_align_fence_=true;
- bool compensated_alignment_enabled_=true,drop_compensate_before_descent_=true;
- bool drop_descent_started_=false,geometry_ready=false;
- mutable int geometry_checks=0;
- bool forced_drop_active_=false,drop_complete=false,have_servo_alignment_context_=true;
- bool servo_action_attempted_=false,servo_action_pending_=false;
- int servo_action_slot_=0,servo_action_id_=1,servo_alignment_decision_seq_=1,servo_alignment_target_id_=7;
- std::string servo_alignment_target_class_="panzer";
- DropActionResult servo_action_result_=DropActionResult::kPending;
- Permission release_authorization_;Context servo_alignment_context_;
- PoseStamped forced_drop_hold_,uav_pose,patrol_cmd,mavros_point_cmd,last_mavros_point_cmd;
- Profile drop_descent_profile_;
- struct {bool data=false;} servo_complete;
- double align_height=1.4,adjust_target_position[3]={},servo_call_timeout_sec_=2;
- double external_cross_recovery_setpoint_height_=1.3,external_standard_recovery_setpoint_height_=1.2,external_recovery_height_=1.0;
- bool cross_drop_completed=false,cross_mission_completed=false,have_planner_cmd=true;
- bool external_waiting_for_motion_=false,external_planner_height_hold_active_=true;int detect_point_counter=0;
- AsyncServo async_servo_;ros::ServiceClient servo_action_client_,servo_client;
- bool hasFreshMissionReleasePermission() const{return permission_fresh;}
- bool externalLandingControlReady(ros::Time) const{return flight_ready;}
- bool freshMotion(Eigen::Vector3d*,Eigen::Vector3d*) const{return motion_fresh;}
- bool compensatedDropSettled(bool){++geometry_checks;return geometry_ready;}
- void resetDropState(){forced_drop_active_=false;}
- void cleanupAfterCrossDrop(){align_height=1.8;current_task_type=MAIN_MISSION;}
- bool forcedDropAuthorized() const;bool forcedDropControlReady() const;bool forcedDropTick();DropActionResult executeDropAction(int);
-};
-METHODS
-}
-using namespace patrol_control;
-int main(int argc,char**argv){
- std::string name=argv[1];LLController c;
- if(name=="force"){
-  assert(c.forcedDropTick());assert(c.async_servo_.calls==1);assert(c.geometry_checks==0);
-  assert(c.drop_descent_profile_.was_reset);assert(c.patrol_cmd.pose.position.z==1.4);
-  for(int i=0;i<100;i++)c.forcedDropTick();assert(c.async_servo_.calls==1);
- }else if(name=="normal"){
-  c.release_authorization_.reason="permission_granted";assert(!c.forcedDropTick());
-  assert(c.executeDropAction(1)==DropActionResult::kPending);assert(c.async_servo_.calls==0);
- }else if(name=="blocked"){
-  for(int n=0;n<6;n++){
-   LLController b;
-   if(n==0)b.permission_fresh=false;
-   if(n==1)b.servo_alignment_context_.deadline={99};
-   if(n==2)b.servo_alignment_decision_seq_=2;
-   if(n==3)b.external_mission_mode_=false;
-   if(n==4)b.Drone_mode=LLController::Land;
-   if(n==5)b.require_vision_release_permission_=false;
-   assert(!b.forcedDropTick());assert(b.async_servo_.calls==0);
-  }
- }else if(name=="fresh"){
-  for(int n=0;n<4;n++){
-   LLController b;
-   if(n==0)b.motion_fresh=false;
-   if(n==1)b.flight_ready=false;
-   if(n==2)b.near_wall_align_fence_=false;
-   if(n==3)b.servo_alignment_context_.active=false;
-   b.forcedDropTick();assert(b.async_servo_.calls==0);
-  }
- }else if(name=="ack"){
-  for(bool cross:{false,true}){
-   LLController b;b.current_task_type=cross?LLController::CROSS_MISSION:LLController::MAIN_MISSION;
-   b.forcedDropTick();b.permission_fresh=false;b.have_servo_alignment_context_=false;
-   b.drop_complete=true;b.servo_complete.data=true;b.uav_pose.pose.position.z=.5;
-   b.forcedDropTick();assert(b.Drone_mode==LLController::Aligning);assert(b.detect_point_counter==0);
-   b.uav_pose.pose.position.z=1.1;b.forcedDropTick();
-   assert(b.Drone_mode==LLController::Run_point);assert(b.detect_point_counter==1);
-   assert(b.external_waiting_for_motion_);assert(!b.have_planner_cmd);
-   assert(b.align_height==(cross?1.3:1.2));assert(b.patrol_cmd.pose.position.x==1);
-   assert(b.async_servo_.calls==1);assert(!b.forced_drop_active_);
-  }
- }else if(name=="unknown"){
-  c.forcedDropTick();c.servo_action_result_=DropActionResult::kServiceCallFailed;
-  for(int n=0;n<100;n++)c.forcedDropTick();
-  assert(c.async_servo_.calls==1);assert(c.Drone_mode==LLController::Aligning);
-  assert(c.detect_point_counter==0);assert(!c.drop_complete);
- }else if(name=="inflight"){
-  c.servo_action_attempted_=true;c.servo_action_slot_=1;c.forcedDropTick();
-  assert(c.async_servo_.calls==0);assert(c.forced_drop_active_);
- }else if(name=="height_stall"){
-  c.release_authorization_.reason="forced_drop_height_stall";
-  assert(!c.forcedDropTick());
-  assert(c.executeDropAction(1)==DropActionResult::kPending);
-  assert(c.async_servo_.calls==0);
- }else return 2;
+void narrowSample(LLController&c,double t,double z=.4,double error=.08,double speed=.5){
+ const auto g=c.compensated_fc_goal_.pose.position;odom(c,t,g.x+error,g.y,z,speed);
 }
 '''
-class ForcedDrop(unittest.TestCase):
- @classmethod
- def setUpClass(cls):
-  s=(P/'src/patrol_control.cpp').read_text()
-  code='\n'.join(method(s,x) for x in ('bool LLController::forcedDropAuthorized(',
-      'bool LLController::forcedDropControlReady(','bool LLController::forcedDropTick(','DropActionResult LLController::executeDropAction('))
-  cls.folder=tempfile.TemporaryDirectory(prefix='forced-drop-');cls.addClassCleanup(cls.folder.cleanup)
-  r=Path(cls.folder.name);cpp=r/'test.cpp';cpp.write_text(PROGRAM.replace('METHODS',code))
-  cls.binary=r/'test'
-  subprocess.run(['g++','-std=c++14','-O1','-fsanitize=undefined','-fno-sanitize-recover=all',
-     '-I',str(P/'include'),str(cpp),'-o',str(cls.binary)],check=True,timeout=60)
- def run_case(self,name):subprocess.run([str(self.binary),name],check=True,timeout=5)
- def test_force(self):self.run_case('force')
- def test_normal(self):self.run_case('normal')
- def test_blocked(self):self.run_case('blocked')
- def test_fresh(self):self.run_case('fresh')
- def test_ack(self):self.run_case('ack')
- def test_unknown(self):self.run_case('unknown')
- def test_inflight(self):self.run_case('inflight')
- def test_removed_height_stall_cannot_bypass_geometry(self):self.run_case('height_stall')
-if __name__=='__main__':unittest.main()
+
+EXTRA_CASES = r'''
+ }else if(name=="narrow_circle" || name=="narrow_cross"){
+  const bool cross=name=="narrow_cross";narrowPrepare(c,cross);
+  narrowSample(c,119.999);assert(!c.compensatedDropSettled(true));
+  narrowSample(c,120.,1.);assert(!c.compensatedDropSettled(true));
+  narrowSample(c,120.001,.4);assert(c.compensatedDropSettled(true));
+  assert(c.executeDropAction(1)==DropActionResult::kPending&&c.servo_action_attempted_);
+  for(int i=0;i<100;++i)c.executeDropAction(1);
+  assert(!c.drop_complete&&!c.servo_complete.data);
+  const bool before=cross?c.recoverCross():c.recoverCircle();assert(!before&&c.detect_point_counter==0);
+  finish(c,t);assert(t->calls==1);assert(c.executeDropAction(1)==DropActionResult::kSuccess);
+  assert(c.detect_point_counter==0);assert(!(cross?c.recoverCross():c.recoverCircle()));
+  narrowSample(c,120.01,1.1,0,0);
+  const bool recovered=cross?c.recoverCross():c.recoverCircle();assert(recovered);
+  c.finishAlignment(recovered);assert(c.Drone_mode==LLController::Run_point);
+  assert(c.detect_point_counter==1&&!c.have_planner_cmd&&c.external_waiting_for_motion_);
+  assert(c.drop_alignment_started_.isZero()&&t->calls==1);
+ }else if(name=="narrow_guards"){
+  for(int n=0;n<20;++n){
+   ros::clock_sec=100.;LLController d;narrowPrepare(d);narrowSample(d,120.);
+   if(n==0)d.compensated_goal_frozen_=false;
+   if(n==1)d.drop_descent_started_=false;
+   if(n==2)d.permission_ready=false;
+   if(n==3)d.servo_alignment_context_.active=false;
+   if(n==4)d.servo_alignment_context_.payload_slot=2;
+   if(n==5)d.servo_alignment_context_.semantic_target_id++;
+   if(n==6)d.servo_alignment_context_.attempt++;
+   if(n==7)d.servo_alignment_context_.mission_id="other";
+   if(n==8)d.servo_alignment_context_.deadline=ros::Time(120);
+   if(n==9)d.control_ready=false;
+   if(n==10)d.Drone_mode=LLController::Run_point;
+   if(n==11)d.have_servo_alignment_context_=false;
+   if(n==12)d.motion_odom_valid_=false;
+   if(n==13)d.uav_pose.header.stamp=ros::Time(100);
+   if(n==14){d.compensated_target_outside_boundary_=true;d.advanceExternalGuard();
+    assert(!d.guard_proceeded);continue;}
+   if(n==15)d.servo_alignment_context_.semantic_target_first_seen=ros::Time(91);
+   if(n==16)d.servo_alignment_context_.align_mode="drop_cross";
+   if(n==17)d.servo_alignment_context_.semantic_target_class="tent";
+   if(n==18)d.motion_odom_.pose.pose.position.z=.451;
+   if(n==19)d.motion_odom_.pose.pose.position.z=.349;
+   assert(!d.compensatedDropSettled(true));
+  }
+ }else if(name=="narrow_serial"){
+  narrowPrepare(c);c.drop_compensate_before_descent_=true;c.drop_descent_started_=false;
+  for(int i=0;i<30;++i){narrowSample(c,120+i*.1,1.,.08,0);
+   close(c.compensatedDropCommandHeight(),1.);assert(!c.drop_descent_started_);
+   assert(!c.compensatedDropSettled(true,nullptr,nullptr,false));}
+  for(int i=0;i<=12;++i){narrowSample(c,123+i*.1,1.,0,0);c.compensatedDropCommandHeight();}
+  assert(c.drop_descent_started_);narrowSample(c,125,.4);assert(c.compensatedDropSettled(true));
+ }else if(name=="narrow_normal_disabled"){
+  narrowPrepare(c);narrowSample(c,101,.4,0,.8);
+  c.drop_settle_config_.stable_duration_sec=100;c.drop_settle_config_.min_samples=1000;
+  assert(c.compensatedDropSettled(true));
+  c.drop_release_timeout_enabled_=false;narrowSample(c,125);
+  assert(!c.compensatedDropSettled(true));narrowSample(c,125.01,.4,0,.8);
+  assert(c.compensatedDropSettled(true));
+ }else if(name=="narrow_clock"){
+  narrowPrepare(c);narrowSample(c,119);assert(!c.compensatedDropSettled(true));
+  ros::clock_sec=118.;assert(!c.compensatedDropSettled(true));
+  narrowSample(c,125);assert(!c.compensatedDropSettled(true)&&c.drop_timeout_clock_invalid_);
+  narrowSample(c,125.01,.4,0,.8);assert(c.compensatedDropSettled(true));
+  c.resetDetectionState();assert(c.drop_alignment_started_.isZero()&&!c.drop_timeout_clock_invalid_);
+ }else if(name=="narrow_cancel"){
+  narrowPrepare(c);narrowSample(c,120);assert(c.compensatedDropSettled(true));
+  auto end=std::make_shared<uav_vision::AlignmentTargetContext>(c.servo_alignment_context_);
+  end->active=false;c.servoAlignmentContextCallback(end);
+  assert(!c.compensatedDropSettled(true)&&c.drop_alignment_started_.isZero());
+  end->active=true;c.servoAlignmentContextCallback(end);
+  narrowSample(c,150);assert(!c.compensatedDropSettled(true));
+  c.resetDropState();assert(c.drop_alignment_started_.isZero()&&!c.drop_timeout_clock_invalid_);
+ }else if(name=="narrow_timer"){
+  LLController::AlignCommand cmd;cmd.goal=center(100);cmd.goal.header.seq=10;
+  cmd.header.stamp=ros::Time(99);c.acceptAlign(&cmd);close(c.drop_alignment_started_.toSec(),100);
+  ros::clock_sec=119.;cmd.header.stamp=ros::Time(119);c.acceptAlign(&cmd);
+  close(c.drop_alignment_started_.toSec(),100);
+  auto heartbeat=std::make_shared<uav_vision::AlignmentTargetContext>();
+  heartbeat->header.stamp=ros::Time(119);heartbeat->decision_seq=10;
+  c.servoAlignmentContextCallback(heartbeat);close(c.drop_alignment_started_.toSec(),100);
+  cmd.goal.header.seq=11;cmd.target_id=8;c.acceptAlign(&cmd);
+  close(c.drop_alignment_started_.toSec(),119);
+ }else assert(false);
+'''
+
+def block(source, signature):
+    return method(source, signature)[len(signature):].strip()
+
+class NarrowDropTimeout(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        source = (geometry.PACKAGE / 'src/patrol_control.cpp').read_text(encoding='utf-8')
+        original = geometry.PROGRAM
+        align = block(method(source, 'void LLController::missionCommandCallback('), 'case patrol_control::MissionCommand::ALIGN:')
+        circle = block(method(source, 'bool LLController::WayPointDetectDone('), 'if(servo_complete.data)')
+        cross = block(method(source, 'bool LLController::CrossDetectionDone('), 'if(servo_complete.data)')
+        done = method(method(source, 'void LLController::externalMissionTick('), 'if (align_done)')
+        members = (EXTRA_MEMBERS.replace('ALIGN_BODY', align.replace('break;', 'return;'))
+                   .replace('CIRCLE_RECOVERY', 'if(servo_complete.data)' + circle)
+                   .replace('CROSS_RECOVERY', 'if(servo_complete.data)' + cross)
+                   .replace('EXTERNAL_DONE', done))
+        xy = 'c.drop_release_height_only_=false;' if 'drop_release_height_only_' in source else ''
+        program = original.replace('class LLController {\npublic:', 'class LLController {\npublic:\n' + members, 1)
+        if 'geometry_msgs::PoseStamped mavros_point_cmd;' not in original:
+            program = program.replace('geometry_msgs::PoseStamped last_mavros_point_cmd;',
+                                      'geometry_msgs::PoseStamped last_mavros_point_cmd,mavros_point_cmd;', 1)
+        program = program.replace('int main(int argc,char**argv){', EXTRA_FUNCTIONS.replace('NORMAL_XY_MODE', xy) + '\nint main(int argc,char**argv){', 1)
+        program = program.replace(' }else assert(false);\n}', EXTRA_CASES + '\n}', 1)
+        program = program.replace('namespace tf {', 'namespace tf {\ngeometry_msgs::Quaternion createQuaternionMsgFromYaw(double yaw){return {0,0,std::sin(yaw/2),std::cos(yaw/2)};}')
+        program = program.replace('METHODS\n}', 'METHODS\n' + method(source, 'void LLController::cleanupAfterCrossDrop(') + '\n}', 1)
+        geometry.PROGRAM = program
+        try:
+            geometry.CompensatedDropGeometryTests.setUpClass.__func__(cls)
+        finally:
+            geometry.PROGRAM = original
+
+    run_case = geometry.CompensatedDropGeometryTests.run_case
+    def test_standard_timeout_release_once_and_normal_ack_recovery(self): self.run_case('narrow_circle')
+    def test_red_cross_timeout_release_once_and_normal_ack_recovery(self): self.run_case('narrow_cross')
+    def test_freeze_descent_permission_identity_deadline_feedback_height_guards(self): self.run_case('narrow_guards')
+    def test_timeout_never_skips_original_pre_descent_xy_window(self): self.run_case('narrow_serial')
+    def test_normal_precision_immediate_and_disabled_timeout_restores_xy(self): self.run_case('narrow_normal_disabled')
+    def test_clock_rollback_latches_fallback_off_but_normal_precision_remains(self): self.run_case('narrow_clock')
+    def test_cancellation_and_late_heartbeat_do_not_resurrect_timeout(self): self.run_case('narrow_cancel')
+    def test_real_align_command_and_context_heartbeats_keep_fixed_start(self): self.run_case('narrow_timer')
+
+if __name__ == '__main__':
+    unittest.main()

@@ -56,6 +56,7 @@ bool operator==(Time a,Time b){return a.seconds==b.seconds;}
 bool operator!=(Time a,Time b){return !(a==b);}
 bool operator<=(Time a,Time b){return a.seconds<=b.seconds;}
 bool operator>(Time a,Time b){return a.seconds>b.seconds;}
+bool operator<(Time a,Time b){return a.seconds<b.seconds;}
 struct Header { Time stamp; std::string frame_id="camera_init"; unsigned int seq=0; };
 }
 namespace geometry_msgs {
@@ -134,10 +135,10 @@ public:
  bool external_mission_mode_=true,compensated_alignment_enabled_=true;
  bool compensated_goal_valid_=false,compensated_goal_frozen_=false;
  bool drop_compensate_before_descent_=true,drop_descent_started_=false;
- bool forcedDropAuthorized() const { return false; }
- bool forcedDropControlReady() const { return true; }
- bool forced_drop_active_=false;
  bool drop_release_height_only_=true;
+ bool drop_release_timeout_enabled_=true,drop_timeout_clock_invalid_=false;
+ double drop_release_timeout_sec_=20.;
+ ros::Time drop_alignment_started_,drop_timeout_last_check_;
  DropDescentConfig drop_descent_config_;
  DropDescentProfile drop_descent_profile_;
  bool dropDescentControlActive() const;
@@ -224,6 +225,7 @@ public:
  bool freshMotion(Eigen::Vector3d*,Eigen::Vector3d*,const char** =nullptr)const;
  bool setCompensatedDropTarget(geometry_msgs::PoseStamped*);
  double compensatedDropXYTolerance() const;
+ bool compensatedDropTimeoutReady();
  bool compensatedDropSettled(bool,double* =nullptr,double* =nullptr,bool=true);
  double compensatedDropCommandHeight();
  bool freezeCompensatedDropTarget();
@@ -971,6 +973,7 @@ class CompensatedDropGeometryTests(unittest.TestCase):
             'bool LLController::freshMotion(',
             'bool LLController::setCompensatedDropTarget(',
             'double LLController::compensatedDropXYTolerance(',
+            'bool LLController::compensatedDropTimeoutReady(',
             'bool LLController::compensatedDropSettled(',
             'bool LLController::dropDescentControlActive(',
             'double LLController::compensatedDropCommandHeight(',

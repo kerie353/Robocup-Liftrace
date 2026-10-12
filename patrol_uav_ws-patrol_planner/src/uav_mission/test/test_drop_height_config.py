@@ -93,7 +93,7 @@ class DropHeightConfigTests(unittest.TestCase):
         for folder in ('01_visual_interrupt', '02_high_view_revisit', '05_low_multi', '06_high_priority', '08_full_mission'):
             with self.subTest(folder=folder):
                 settings = yaml.safe_load((base/folder/'settings.yaml').read_text())
-                expected = [.35,.30,.38] if folder == '08_full_mission' else [.30,.28,.35]
+                expected = [.35,.30,.40] if folder == '08_full_mission' else [.30,.28,.35]
                 self.assertEqual([settings[k] for k in ('drop_agl','release_min_agl','release_max_agl')], expected)
                 if folder == '08_full_mission':
                     # Geometry is an offline fixture, never a deployed replacement.

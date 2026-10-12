@@ -15,6 +15,7 @@ from uav_mission.motion_optimization import MotionOptimization, optimize_post_ro
 from uav_mission.landing_posctl_config import validate_landing_posctl, landing_control_parameters
 from uav_mission.navigation_recovery_config import recovery_parameters
 from uav_mission.drop_height_config import release_heights
+from uav_mission.drop_descent_config import drop_descent_parameters
 
 
 def apply_overrides(settings, motion=None, columns=None, motion_timeout=None, resume=None):
@@ -34,6 +35,7 @@ def apply_overrides(settings, motion=None, columns=None, motion_timeout=None, re
 
 
 def validate(settings, flight=False):
+    drop_descent_parameters(settings)
     if not isinstance(settings,dict):raise ValueError('field configuration must be an object')
     release_heights(settings)
     lead=settings.get('takeoff_z_lead_m',0.)
@@ -199,6 +201,7 @@ def generate(root,out,settings,fc_xyz,rig):
     control['switch'].update(auto_land=True,flag_landing_detect=1)
     control['drop_system'].update(enable_drop=True,release_setpoint_height=drop,
         release_min_height=ground+release_min,height_threshold=ground+release_max)
+    control['drop_system']['descent'] = drop_descent_parameters(settings)
     # 两套表均保留实测值，表示 FC 中心到投口的机体系杆臂，FLU 为前、左、上。
     # 控制器减去经完整机体姿态旋转后的杆臂，不能按固定地图偏移直接相加。
     control['drop_system'].update(slot_offset_semantics='body_flu_lever_arm', compensated_alignment=True)

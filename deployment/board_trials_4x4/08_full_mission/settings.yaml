@@ -1,6 +1,9 @@
 mode: high_view_full
 low_agl: 1.4
 high_agl: 2.6
+# 投递下降模式；不影响H降落模式。
+drop_descent_mode: 1
+drop_descent_speed_mps: 0.20
 drop_agl: 0.40
 release_min_agl: 0.35
 release_max_agl: 0.45

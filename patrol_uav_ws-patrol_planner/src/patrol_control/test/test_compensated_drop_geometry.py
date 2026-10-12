@@ -23,6 +23,7 @@ PROGRAM = r'''
 #include "patrol_control/drop_action.h"
 #include "patrol_control/landing_handoff_stability.h"
 #include "patrol_control/drop_pre_descent_stability.h"
+#include "patrol_control/drop_descent_profile.h"
 #include "patrol_control/async_servo.h"
 #include "patrol_control/servo_action_result.h"
 #include "patrol_control/near_wall_align.h"
@@ -134,11 +135,20 @@ public:
  bool compensated_goal_valid_=false,compensated_goal_frozen_=false;
  bool drop_compensate_before_descent_=true,drop_descent_started_=false;
  bool drop_release_height_only_=true;
+ DropDescentConfig drop_descent_config_;
+ DropDescentProfile drop_descent_profile_;
+ bool dropDescentControlActive() const;
  void loadDropSequenceConfig(){SERIAL_PARAMETERS}
  bool compensated_target_outside_boundary_=false,guard_proceeded=false;
  NearWallAlignFence near_wall_align_fence_;
  struct { uav_vision::DropAlignmentFeedback last; void publish(const uav_vision::DropAlignmentFeedback& m){last=m;} } compensated_alignment_pub_;
  geometry_msgs::PoseStamped patrol_cmd;
+ geometry_msgs::PoseStamped mavros_point_cmd;
+ int composeDropDescentCommand(){
+  mavros_point_cmd=compensated_fc_goal_;mavros_point_cmd.pose.position.z=drop_release_setpoint_height_;
+  DROP_DESCENT_COMMANDS
+  return independent_drop?(zero_velocity_drop?3:2):1;
+ }
  geometry_msgs::PoseStamped uav_pose,compensated_fc_goal_,waypoint_mark_point,waypoint_temp;
  geometry_msgs::PoseStamped cross_mark_point,land_mark_point;
  geometry_msgs::Point compensated_target_center_;
@@ -430,6 +440,39 @@ int main(int argc,char**argv){
     d.uav_drop_ready_=true;d.latest_drop_ready_time_=ros::Time(102);
     assert(d.freezeCompensatedDropTarget());settle_before_descent(d,102.1);
    }
+  }else if(name=="serial_descent_modes"){
+   for(int mode=1;mode<=3;++mode){
+    ros::clock_sec=100;LLController d;
+    d.nh_.values["drop_system/descent/mode"]=mode;d.loadDropSequenceConfig();
+    capture(d);settle_before_descent(d,101);
+    assert(d.drop_descent_config_.mode==mode);
+    assert(d.dropDescentControlActive()==(mode!=1));
+    if(mode!=1){
+     close(d.drop_descent_profile_.height(),1);
+     const auto g=d.compensated_fc_goal_.pose.position;
+     odom(d,102.1,g.x+.25,g.y-.20,1);
+     assert(d.composeDropDescentCommand()==mode);close(d.mavros_point_cmd.pose.position.z,.98);
+     close(d.mavros_point_cmd.pose.position.x,mode==2?g.x:g.x+.25);
+     close(d.mavros_point_cmd.pose.position.y,mode==2?g.y:g.y-.20);
+     // Horizontal motion cannot change the independent Z trajectory.
+     odom(d,102.2,g.x+.35,g.y-.30,1);assert(d.composeDropDescentCommand()==mode);
+     close(d.mavros_point_cmd.pose.position.z,.96);
+     ros::clock_sec=102.5;d.uav_pose.header.stamp=ros::Time::now();
+     assert(d.composeDropDescentCommand()==mode);close(d.mavros_point_cmd.pose.position.z,.96);
+     d.servo_alignment_context_.active=false;assert(!d.dropDescentControlActive());
+     assert(d.composeDropDescentCommand()==1);
+     d.resetDropState();assert(!d.drop_descent_profile_.active());
+    }
+   }
+  }else if(name=="serial_descent_profile"){
+   DropDescentConfig config;config.mode=2;DropDescentProfile profile(config);
+   assert(profile.start(1.4,.4,100));
+   close(profile.update(100.1),1.38);close(profile.update(100.1),1.38);
+   close(profile.update(101),1.38); // long missed interval holds, never catches up
+   profile.pause(101.1);close(profile.update(101.2),1.36);
+   for(int i=1;i<=60;++i)profile.update(101.2+i*.1);
+   close(profile.height(),.4);profile.reset();assert(!profile.active());
+   config.mode=4;assert(!config.valid());config.mode=3;config.speed_mps=0;assert(!config.valid());
   }else if(name=="height_only_rpc"){
    for(const std::string cls:{"pillbox","red_cross"}){
     ros::clock_sec=100;LLController d;auto transport=std::make_shared<Transport>();
@@ -926,6 +969,7 @@ class CompensatedDropGeometryTests(unittest.TestCase):
             'bool LLController::setCompensatedDropTarget(',
             'double LLController::compensatedDropXYTolerance(',
             'bool LLController::compensatedDropSettled(',
+            'bool LLController::dropDescentControlActive(',
             'double LLController::compensatedDropCommandHeight(',
             'bool LLController::freezeCompensatedDropTarget(',
             'void LLController::publishCompensatedAlignment(',
@@ -977,12 +1021,15 @@ class CompensatedDropGeometryTests(unittest.TestCase):
             return body[start:end]
         guard_start = source.index('    if (compensated_alignment_enabled_ &&', source.index('void LLController::externalMissionTick()'))
         guard_end = source.index('    std_msgs::Bool detect_enable_msg;', guard_start)
+        descent_start = source.index('    const bool pending_independent_drop =')
+        descent_end = source.index('    // High H descent carries XY', descent_start)
         cpp.write_text(PROGRAM.replace('METHODS', production).replace('DEFAULTS', defaults)
                        .replace('RELEASE_HEIGHT_PARAMETERS', height_parameters)
                        .replace('RED_CROSS_PARAMETERS', red_parameters)
                        .replace('SERIAL_PARAMETERS', serial_parameters)
                        .replace('CONFIGURED_DROP', configured_assignments)
                        .replace('EXTERNAL_GUARD', source[guard_start:guard_end])
+                       .replace('DROP_DESCENT_COMMANDS', source[descent_start:descent_end])
                        .replace('CIRCLE_RELEASE', outer_release('bool LLController::WayPointDetectDone('))
                        .replace('CROSS_RELEASE', outer_release('bool LLController::CrossDetectionDone('))
                        .replace('CIRCLE_DESCENT', circle).replace('CROSS_DESCENT', cross), encoding='utf-8')
@@ -1012,6 +1059,8 @@ class CompensatedDropGeometryTests(unittest.TestCase):
     def test_pre_descent_checks_rotating_outlet_speed_as_well_as_fc_speed(self): self.run_case('serial_outlet_speed')
     def test_pre_descent_invalid_control_stale_feedback_and_context_reset_partial_window(self): self.run_case('serial_invalid_window')
     def test_pre_descent_partial_window_is_cleared_by_both_action_reset_paths(self): self.run_case('serial_partial_reset')
+    def test_three_descent_modes_keep_entry_gate_and_reset_transaction(self): self.run_case('serial_descent_modes')
+    def test_independent_descent_rate_pause_floor_and_invalid_config(self): self.run_case('serial_descent_profile')
     def test_height_only_circle_and_cross_release_after_xy_rebound(self): self.run_case('height_only_rpc')
     def test_height_only_retains_height_freshness_context_control_and_permission_guards(self): self.run_case('height_only_guards')
     def test_height_only_does_not_bypass_four_cm_point_one_speed_one_second_before_descent(self): self.run_case('height_only_pre_descent')

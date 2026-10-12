@@ -67,22 +67,24 @@ class FrameAdapter:
              '/navigation/setpoint_mission', '/mavros/setpoint_position/local'),
             ('landing_vertical', PoseStamped, self.mission, self.local,
              '/navigation/landing_setpoint_vertical', '/mavros/setpoint_raw/local'),
+            ('drop_vertical', PoseStamped, self.mission, self.local,
+             '/navigation/drop_setpoint_vertical', '/mavros/setpoint_raw/local'),
         ):
             # Feedback-only mode has no flight-command publisher or subscriber.
-            if name in ('setpoint', 'landing_vertical') and not rospy.get_param('~enable_setpoints', False):
+            if name in ('setpoint', 'landing_vertical', 'drop_vertical') and not rospy.get_param('~enable_setpoints', False):
                 continue
             input_topic = rospy.get_param('~' + name + '_input', input_default)
             output_topic = rospy.get_param('~' + name + '_output', output_default)
             if rospy.resolve_name(input_topic) == rospy.resolve_name(output_topic):
                 raise ValueError('adapter input/output loop')
-            output_kind = PositionTarget if name == 'landing_vertical' else kind
+            output_kind = PositionTarget if name in ('landing_vertical', 'drop_vertical') else kind
             pub = rospy.Publisher(output_topic, output_kind, queue_size=1)
             self.subscribers.append(rospy.Subscriber(
                 input_topic, kind, self.callback,
                 callback_args=(source, target, pub, name), queue_size=1))
 
     def callback(self, msg, args):
-        if len(args) > 3 and args[3] in ('setpoint', 'landing_vertical'):
+        if len(args) > 3 and args[3] in ('setpoint', 'landing_vertical', 'drop_vertical'):
             # Serialize both output lanes: an old queued XYZ callback must never
             # override a newer vertical-only command (nor a later abort/hold).
             with self.command_lock:
@@ -95,7 +97,7 @@ class FrameAdapter:
 
     def convert_and_publish(self, msg, args):
         source, target, pub = args[:3]
-        vertical = len(args) > 3 and args[3] == 'landing_vertical'
+        vertical = len(args) > 3 and args[3] in ('landing_vertical', 'drop_vertical')
         try:
             age = (rospy.Time.now() - msg.header.stamp).to_sec()
             if (msg.header.frame_id != source or msg.header.stamp.to_sec() <= 0
@@ -124,7 +126,8 @@ class FrameAdapter:
             else:
                 out.pose = pose
             if vertical:
-                out = vertical_target(msg.header, pose, rotation)
+                out = (drop_vertical_target(msg.header, pose, rotation)
+                       if args[3] == 'drop_vertical' else vertical_target(msg.header, pose, rotation))
             out.header.frame_id = target
             pub.publish(out)
             return True
@@ -132,6 +135,24 @@ class FrameAdapter:
                 tf2_ros.ExtrapolationException) as error:
             rospy.logwarn_throttle(5.0, 'Navigation frame conversion rejected: %s', error)
             return False
+
+
+def drop_vertical_target(header, pose, rotation):
+    """Drop mode 3: ignore XY position, control VX=VY=0 and the ramped Z."""
+    if not np.allclose(rotation[:, 2], [0., 0., 1.], atol=1e-6, rtol=0.):
+        raise ValueError('vertical delivery requires gravity-aligned frames')
+    out = PositionTarget()
+    out.header = copy.deepcopy(header)
+    out.coordinate_frame = PositionTarget.FRAME_LOCAL_NED
+    out.type_mask = (PositionTarget.IGNORE_PX | PositionTarget.IGNORE_PY |
+                     PositionTarget.IGNORE_VZ | PositionTarget.IGNORE_AFX |
+                     PositionTarget.IGNORE_AFY | PositionTarget.IGNORE_AFZ |
+                     PositionTarget.IGNORE_YAW_RATE)
+    out.position.z = pose.position.z
+    out.velocity.x = out.velocity.y = 0.
+    q = pose.orientation
+    out.yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])[2]
+    return out
 
 
 def vertical_target(header, pose, rotation):

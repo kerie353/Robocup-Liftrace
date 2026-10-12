@@ -54,6 +54,11 @@ motion_feedback:
   odom_topic: /mavros/local_position/odom
   twist_frame: child
 drop_system:
+  descent:
+    mode: 1  # 1=原三轴位置；2=冻结XY+独立Z；3=水平零速度+独立Z
+    speed_mps: 0.20  # 仅模式2/3使用，Z指令下降速度
+    max_step_dt_sec: 0.20
+    zero_velocity_setpoint_topic: /navigation/drop_setpoint_vertical
   release_height_only: true  # 下降后释放几何仅检查高度；保留任务、反馈及执行许可
   compensate_before_descent: true  # 先高位水平补偿，双XY及水平速度连续达标1秒后下降
   # 下降入口独立门控；不检查窗口位移、高度误差或竖直速度。

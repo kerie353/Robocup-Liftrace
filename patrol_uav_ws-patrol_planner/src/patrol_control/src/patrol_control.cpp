@@ -222,6 +222,9 @@ void LLController::initializeNode() {
     landing_vertical_cmd_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(
         nh_.param<std::string>("external_landing/vertical_setpoint_topic",
             "/navigation/landing_setpoint_vertical"), 1);
+    drop_vertical_cmd_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(
+        nh_.param<std::string>("drop_system/descent/zero_velocity_setpoint_topic",
+            "/navigation/drop_setpoint_vertical"), 1);
     if (!external_mission_mode_) {
         detect_sub_ = nh_.subscribe(
             "/detect/waypoint_mark_point", 1,
@@ -473,6 +476,7 @@ void LLController::externalMissionTick() {
             adjust_target_position[2] = align_height;
             drop_capture_window_.reset(); drop_release_window_.reset();
             drop_pre_descent_window_.reset();
+            drop_descent_profile_.reset();
             return;
         }
     }
@@ -1701,6 +1705,36 @@ void LLController::cmdCallback(const ros::TimerEvent& event) {
         }
     }
 
+    const bool pending_independent_drop = drop_descent_config_.mode != 1 &&
+        external_mission_mode_ && Drone_mode == Aligning && drop_descent_started_ && !drop_complete;
+    bool independent_drop = pending_independent_drop && dropDescentControlActive();
+    bool zero_velocity_drop = independent_drop && drop_descent_config_.mode == 3;
+    if (pending_independent_drop && !independent_drop) {
+        drop_descent_profile_.pause(ros::Time::now().toSec());
+        mavros_point_cmd = uav_pose; // Revoked transaction restores the existing position hold lane.
+    }
+    if (independent_drop && near_wall_align_fence_.enabled &&
+        (!near_wall_align_fence_.wellFormed() || !near_wall_align_fence_.contains(
+            uav_pose.pose.position.x,uav_pose.pose.position.y,tf::getYaw(uav_pose.pose.orientation)))) {
+        drop_descent_profile_.pause(ros::Time::now().toSec());
+        independent_drop = zero_velocity_drop = false;
+        mavros_point_cmd = uav_pose;
+        ROS_WARN_THROTTLE(1.0,"[DropGeometry] descent boundary hold; suppressing vertical lane");
+    }
+    if (independent_drop) {
+        Eigen::Vector3d velocity, angular;
+        const double now = ros::Time::now().toSec();
+        if (freshMotion(&velocity, &angular) && externalLandingControlReady(ros::Time::now()))
+            mavros_point_cmd.pose.position.z = drop_descent_profile_.update(now);
+        else {
+            drop_descent_profile_.pause(now);
+            mavros_point_cmd.pose.position.z = drop_descent_profile_.height();
+        }
+        mavros_point_cmd.pose.position.x = zero_velocity_drop
+            ? uav_pose.pose.position.x : compensated_fc_goal_.pose.position.x;
+        mavros_point_cmd.pose.position.y = zero_velocity_drop
+            ? uav_pose.pose.position.y : compensated_fc_goal_.pose.position.y;
+    }
     // High H descent carries XY only as a transform anchor. The adapter ignores
     // XY position/velocity; keep lateral error out of the generic Z lead limit.
     const bool vertical_landing = external_mission_mode_ && Drone_mode == Land &&
@@ -1723,7 +1757,7 @@ void LLController::cmdCallback(const ros::TimerEvent& event) {
         const double dz = static_cast<double>(takeoff_point[2]) - current_pos.z();
         mavros_point_cmd.pose.position.z = current_pos.z() +
             std::max(-takeoff_lead, std::min(takeoff_lead, dz));
-    } else if (distance_to_target > px4_max_distance &&
+    } else if (!independent_drop && distance_to_target > px4_max_distance &&
         !(external_mission_mode_ && Drone_mode == Run_point &&
           external_planner_height_hold_active_ && !external_planner_command_accepted)) {
         Eigen::Vector3d direction = (target_pos - current_pos).normalized();
@@ -1811,6 +1845,8 @@ void LLController::cmdCallback(const ros::TimerEvent& event) {
     if (vertical_landing) {
         mavros_point_cmd.header.frame_id = external_landing_frame_;
         landing_vertical_cmd_pub_.publish(mavros_point_cmd);
+    } else if (zero_velocity_drop) {
+        drop_vertical_cmd_pub_.publish(mavros_point_cmd);
     } else {
         mavros_point_cmd_pub.publish(mavros_point_cmd);
     }
@@ -1945,6 +1981,11 @@ void LLController::load_params() {
     load_stability("drop_system/settle", &drop_settle_config_);
     drop_compensate_before_descent_ = nh_.param("drop_system/compensate_before_descent", true);
     drop_release_height_only_ = nh_.param("drop_system/release_height_only", true);
+    drop_descent_config_.mode = nh_.param("drop_system/descent/mode", 1);
+    drop_descent_config_.speed_mps = nh_.param("drop_system/descent/speed_mps", 0.20);
+    drop_descent_config_.max_step_dt_sec = nh_.param("drop_system/descent/max_step_dt_sec", 0.20);
+    if (!drop_descent_config_.valid()) throw std::invalid_argument("invalid drop descent configuration");
+    drop_descent_profile_ = DropDescentProfile(drop_descent_config_);
     drop_red_cross_xy_tolerance_m_ = nh_.param(
         "drop_system/settle/red_cross_xy_tolerance_m", 0.04);
     if (!std::isfinite(drop_red_cross_xy_tolerance_m_) || drop_red_cross_xy_tolerance_m_ <= 0.0)
@@ -3867,6 +3908,19 @@ bool LLController::compensatedDropSettled(bool release, double* error, double* s
     return ready;
 }
 
+bool LLController::dropDescentControlActive() const {
+    const auto& c = servo_alignment_context_;
+    const auto& b = compensated_context_;
+    return external_mission_mode_ && compensated_alignment_enabled_ && Drone_mode == Aligning &&
+        compensated_goal_valid_ && compensated_goal_frozen_ && !compensated_target_outside_boundary_ &&
+        drop_descent_started_ && !drop_complete && drop_descent_profile_.active() &&
+        have_servo_alignment_context_ && c.active && c.has_target && c.deadline > ros::Time::now() &&
+        c.mission_id == b.mission_id && c.decision_seq == b.decision_seq && c.attempt == b.attempt &&
+        c.payload_slot == b.payload_slot && c.semantic_target_id == b.semantic_target_id &&
+        c.semantic_target_first_seen == b.semantic_target_first_seen &&
+        c.semantic_target_class == b.semantic_target_class && c.align_mode == b.align_mode;
+}
+
 double LLController::compensatedDropCommandHeight() {
     // One-way within this action: invalid feedback/context still blocks release,
     // but must never command a climb back to visual capture height.
@@ -3875,6 +3929,18 @@ double LLController::compensatedDropCommandHeight() {
     if (!drop_compensate_before_descent_ ||
         compensatedDropSettled(true, nullptr, nullptr, false)) {
         drop_descent_started_ = true;
+        if (drop_descent_config_.mode != 1) {
+            const double initial_z = std::min(motion_odom_.pose.pose.position.z,
+                                             external_alignment_capture_height_);
+            if (!drop_descent_profile_.start(initial_z, drop_release_setpoint_height_,
+                                             ros::Time::now().toSec())) {
+                drop_descent_started_ = false;
+                return external_alignment_capture_height_;
+            }
+        }
+        ROS_INFO("[DropGeometry] descent_mode=%d z_speed=%.3f z_initial=%.4f",
+            drop_descent_config_.mode,drop_descent_config_.speed_mps,
+            drop_descent_config_.mode == 1 ? uav_pose.pose.position.z : drop_descent_profile_.height());
         ROS_INFO("[DropGeometry] descent_started slot=%u decision=%u xy_tolerance=%.3f class=%s "
                  "capture_z=%.4f release_z=%.4f serial=%s",
                  compensated_context_.payload_slot, compensated_context_.decision_seq,
@@ -3894,6 +3960,7 @@ bool LLController::freezeCompensatedDropTarget() {
     if (!uav_drop_ready_ || age < 0.0 || age > drop_offset_timeout_) return false;
     compensated_goal_frozen_ = true;
     drop_descent_started_ = false;
+    drop_descent_profile_.reset();
     drop_release_window_.reset();
     drop_pre_descent_window_.reset();
     ROS_INFO("[DropGeometry] frozen slot=%u center=(%.3f,%.3f) FC=(%.3f,%.3f) source=%.6f "
@@ -4199,6 +4266,7 @@ void LLController::resetDropState() {
     compensated_target_outside_boundary_ = false;
     compensated_goal_valid_ = compensated_goal_frozen_ = false;
     drop_descent_started_ = false;
+    drop_descent_profile_.reset();
     compensated_observation_stamp_ = ros::Time(0);
     drop_capture_window_.reset();
     drop_release_window_.reset();
@@ -4473,6 +4541,7 @@ void LLController::resetDetectionState() {
     compensated_target_outside_boundary_ = false;
     compensated_goal_valid_ = compensated_goal_frozen_ = false;
     drop_descent_started_ = false;
+    drop_descent_profile_.reset();
     compensated_observation_stamp_ = ros::Time(0);
     drop_capture_window_.reset();
     drop_release_window_.reset();

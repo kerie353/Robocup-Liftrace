@@ -96,10 +96,12 @@ void holdExternalPlannerHeight(const char*,double){
 void positionCallback(const geometry_msgs::PoseStamped&);
 bool hasValidExternalPlannerCommand()const;
 void missionCommandCallback(const patrol_control::MissionCommand::ConstPtr&);
+Publisher drop_vertical_cmd_pub_,landing_vertical_cmd_pub_;
+std::string external_landing_frame_="camera_init";
 void tick();
 };
 '''+position+valid+navigation
-        code += 'void LLController::tick(){bool external_planner_command_accepted=false;\nswitch(Drone_mode){\n'
+        code += 'void LLController::tick(){bool external_planner_command_accepted=false;\nconst bool independent_drop=false,zero_velocity_drop=false,vertical_landing=false;\nswitch(Drone_mode){\n'
         code += takeoff+running+'default:break;\n}\n'+limiter+yaw+publish+'\n}\n'
         code += r'''
 void close(double a,double b){assert(std::abs(a-b)<1e-9);}

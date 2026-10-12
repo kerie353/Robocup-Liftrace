@@ -93,14 +93,15 @@ class DropHeightConfigTests(unittest.TestCase):
         for folder in ('01_visual_interrupt', '02_high_view_revisit', '05_low_multi', '06_high_priority', '08_full_mission'):
             with self.subTest(folder=folder):
                 settings = yaml.safe_load((base/folder/'settings.yaml').read_text())
-                self.assertEqual([settings[k] for k in ('drop_agl','release_min_agl','release_max_agl')], [.30,.28,.35])
+                expected = [.35,.30,.38] if folder == '08_full_mission' else [.30,.28,.35]
+                self.assertEqual([settings[k] for k in ('drop_agl','release_min_agl','release_max_agl')], expected)
                 if folder == '08_full_mission':
                     # Geometry is an offline fixture, never a deployed replacement.
                     apply_site_profile(settings, dict(corridor_waypoints=[dict(x=.6,y=0.,agl=1.),dict(x=1.5,y=.4,agl=1.)],landing_xy=[2.5,0.]))
                 with tempfile.TemporaryDirectory() as path:
                     ref = generate_trial(ROOT, path, settings, (0,0,0), rig)
                     control = yaml.safe_load((Path(path)/'control.yaml').read_text())['drop_system']
-                for key, agl in [('release_setpoint_height',.30),('release_min_height',.28),('height_threshold',.35)]:
+                for key, agl in zip(('release_setpoint_height','release_min_height','height_threshold'), expected):
                     self.assertAlmostEqual(control[key]-ref['ground_z'], agl)
 
 

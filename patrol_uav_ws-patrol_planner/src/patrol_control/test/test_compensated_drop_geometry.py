@@ -133,6 +133,7 @@ public:
  bool external_mission_mode_=true,compensated_alignment_enabled_=true;
  bool compensated_goal_valid_=false,compensated_goal_frozen_=false;
  bool drop_compensate_before_descent_=true,drop_descent_started_=false;
+ bool drop_release_height_only_=true;
  void loadDropSequenceConfig(){SERIAL_PARAMETERS}
  bool compensated_target_outside_boundary_=false,guard_proceeded=false;
  NearWallAlignFence near_wall_align_fence_;
@@ -246,8 +247,10 @@ geometry_msgs::PoseStamped center(double t){
  geometry_msgs::PoseStamped p;p.header.stamp=ros::Time(t);p.pose.position={2,3,1};return p;
 }
 bool serial_test=false;
+bool height_only_test=false;
 void capture(LLController&c){
  if(!serial_test)c.drop_compensate_before_descent_=false; // Isolate the pre-existing release tests in explicit compatibility mode.
+ if(!serial_test&&!height_only_test)c.drop_release_height_only_=false;
  odom(c,100,2,3,1);auto p=center(100);assert(c.setCompensatedDropTarget(&p));
  const auto g=c.compensated_fc_goal_.pose.position;
  // Reliable visual capture is already ready; full 12cm correction may
@@ -273,8 +276,10 @@ void settle_before_descent(LLController&c,double start,double height=1){
 }
 int main(int argc,char**argv){
  assert(argc==2);const std::string name=argv[1];ros::clock_sec=100;
- serial_test=name.find("serial_")==0;
- LLController c;if(!serial_test)c.drop_compensate_before_descent_=false;
+  height_only_test=name.find("height_only_")==0;
+  serial_test=name.find("serial_")==0||height_only_test;
+  LLController c;if(!serial_test)c.drop_compensate_before_descent_=false;
+  if(!serial_test&&!height_only_test)c.drop_release_height_only_=false;
  auto t=std::make_shared<Transport>();c.servo_client.impl=c.servo_action_client_.impl=t;
  if(name=="serial_sequence"){
   for(const std::string cls:{"pillbox","red_cross"}){
@@ -300,8 +305,9 @@ int main(int argc,char**argv){
    assert(d.drop_descent_started_);close(d.align_height,.40);
    // Descent phase latches, but release readiness never latches.
     odom(d,102.2,g.x+.07,g.y,.40);tick();close(d.align_height,.40);
-   assert(!d.compensatedDropSettled(true));
-   assert(d.executeDropAction(1)==DropActionResult::kPending&&!d.servo_action_attempted_);
+    assert(d.compensatedDropSettled(true)); // Height-only final gate permits XY rebound.
+    d.permission_ready=false;
+    assert(d.executeDropAction(1)==DropActionResult::kRejected&&!d.servo_action_attempted_);
     odom(d,102.3,g.x,g.y,.46);tick();close(d.align_height,.40);assert(!d.compensatedDropSettled(true));
     odom(d,102.4,g.x,g.y,.40);d.permission_ready=false;tick();
    assert(!(cross?d.crossReleaseReady():d.circleReleaseReady()));
@@ -423,7 +429,55 @@ int main(int argc,char**argv){
     d.uav_drop_ready_=true;d.latest_drop_ready_time_=ros::Time(102);
     assert(d.freezeCompensatedDropTarget());settle_before_descent(d,102.1);
    }
- }else if(name=="class_thresholds"){
+  }else if(name=="height_only_rpc"){
+   for(const std::string cls:{"pillbox","red_cross"}){
+    ros::clock_sec=100;LLController d;auto transport=std::make_shared<Transport>();
+    d.servo_client.impl=d.servo_action_client_.impl=transport;
+    const bool cross=cls=="red_cross";d.current_align_mode_=cross?"drop_cross":"drop_circle";
+    d.servo_alignment_context_.align_mode=d.current_align_mode_;
+    d.servo_alignment_context_.semantic_target_class=cls;d.servo_alignment_target_class_=cls;
+    capture(d);settle_before_descent(d,101);const auto g=d.compensated_fc_goal_.pose.position;
+    odom(d,102.1,g.x+.30,g.y+.20,.40,.4);
+    assert(d.compensatedDropSettled(true));
+    assert(cross?d.crossReleaseReady():d.circleReleaseReady());
+    assert(d.executeDropAction(1)==DropActionResult::kPending&&d.servo_action_attempted_);
+    finish(d,transport);assert(transport->calls==1);
+   }
+  }else if(name=="height_only_guards"){
+   for(int reason=0;reason<7;++reason){
+    ros::clock_sec=100;LLController d;auto transport=std::make_shared<Transport>();
+    d.servo_client.impl=d.servo_action_client_.impl=transport;
+    capture(d);settle_before_descent(d,101);const auto g=d.compensated_fc_goal_.pose.position;
+    odom(d,102.1,g.x+.30,g.y,.40);
+    if(reason==0)odom(d,102.2,g.x+.30,g.y,.349);
+    if(reason==1)odom(d,102.2,g.x+.30,g.y,.451);
+    if(reason==2)d.control_ready=false;
+    if(reason==3){ros::clock_sec=102.4;d.uav_pose.header.stamp=ros::Time::now();}
+    if(reason==4)d.servo_alignment_context_.active=false;
+    if(reason==5)d.servo_alignment_context_.mission_id="other";
+    if(reason==6)d.permission_ready=false;
+    const auto result=d.executeDropAction(1);
+    assert(result==DropActionResult::kPending||result==DropActionResult::kRejected);
+    assert(!d.servo_action_attempted_&&transport->calls==0);
+   }
+  }else if(name=="height_only_pre_descent"){
+   capture(c);const auto g=c.compensated_fc_goal_.pose.position;
+   for(int i=0;i<=12;++i){odom(c,101+i*.1,g.x+.05,g.y,1);close(c.compensatedDropCommandHeight(),1);}
+   for(int i=0;i<=12;++i){odom(c,102.3+i*.1,g.x,g.y,1,.101);close(c.compensatedDropCommandHeight(),1);}
+   settle_before_descent(c,103.6);
+  }else if(name=="height_only_band"){
+   capture(c);settle_before_descent(c,101);const auto g=c.compensated_fc_goal_.pose.position;
+   int i=0;for(double z:{.349,.35,.40,.45,.451}){
+    odom(c,102.1+(i++)*.01,g.x+.30,g.y,z);
+    assert(c.compensatedDropSettled(true)==(z>=.35&&z<=.45));
+   }
+  }else if(name=="height_only_config"){
+   assert(c.drop_release_height_only_);
+   c.nh_.values["drop_system/release_height_only"]=0;c.loadDropSequenceConfig();
+   assert(!c.drop_release_height_only_);capture(c);settle_before_descent(c,101);
+   const auto g=c.compensated_fc_goal_.pose.position;
+   odom(c,102.1,g.x+.07,g.y,.40);assert(!c.compensatedDropSettled(true));
+  }else if(name=="class_thresholds"){
   for(const std::string cls:{"tent","pillbox","bridge","panzer","red_cross","","circle","tank","PILLBOX"}){
    ros::clock_sec=100;LLController d;d.servo_alignment_context_.semantic_target_class=cls;
    d.servo_alignment_target_class_=cls;capture(d);const auto g=d.compensated_fc_goal_.pose.position;
@@ -957,6 +1011,11 @@ class CompensatedDropGeometryTests(unittest.TestCase):
     def test_pre_descent_checks_rotating_outlet_speed_as_well_as_fc_speed(self): self.run_case('serial_outlet_speed')
     def test_pre_descent_invalid_control_stale_feedback_and_context_reset_partial_window(self): self.run_case('serial_invalid_window')
     def test_pre_descent_partial_window_is_cleared_by_both_action_reset_paths(self): self.run_case('serial_partial_reset')
+    def test_height_only_circle_and_cross_release_after_xy_rebound(self): self.run_case('height_only_rpc')
+    def test_height_only_retains_height_freshness_context_control_and_permission_guards(self): self.run_case('height_only_guards')
+    def test_height_only_does_not_bypass_four_cm_point_one_speed_one_second_before_descent(self): self.run_case('height_only_pre_descent')
+    def test_height_only_accepts_closed_height_band_despite_horizontal_error(self): self.run_case('height_only_band')
+    def test_height_only_default_and_explicit_legacy_xy_mode(self): self.run_case('height_only_config')
     def test_bound_standard_red_cross_and_unknown_class_thresholds(self): self.run_case('class_thresholds')
     def test_semantic_class_not_geometry_mode_selects_threshold(self): self.run_case('class_mode')
     def test_live_class_change_cannot_loosen_frozen_transaction(self): self.run_case('class_binding')

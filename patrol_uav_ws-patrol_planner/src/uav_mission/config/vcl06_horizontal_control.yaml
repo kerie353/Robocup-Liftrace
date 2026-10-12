@@ -65,6 +65,7 @@ motion_feedback:
   odom_topic: /mavros/local_position/odom
   twist_frame: child
 drop_system:
+  release_height_only: true  # 下降后释放几何仅检查高度；保留任务、反馈及执行许可
   compensate_before_descent: true  # 先高位水平补偿，双XY及水平速度连续达标1秒后下降
   # 下降入口独立门控；不检查窗口位移、高度误差或竖直速度。
   pre_descent:
@@ -78,7 +79,7 @@ drop_system:
   slot_offset_semantics: body_flu_lever_arm
   compensated_alignment: true
   alignment_feedback_topic: /uav_vision/drop_alignment_feedback
-  # 最终释放使用原 settle 门限；下降前使用独立 pre_descent，连续达标1秒。
+  # release_height_only=true 时，settle 的类别XY门限仅保留兼容，不参与最终释放。
   # 高度使用 release_min_height 至 height_threshold 的闭区间，不要求停稳。
   # height_tolerance_m、两项速度、stable_duration_sec、max_sample_gap_sec、min_samples
   # 仅兼容保留，不参与补偿投递放行；调这些字段不能改变投递行为。H使用独立配置。

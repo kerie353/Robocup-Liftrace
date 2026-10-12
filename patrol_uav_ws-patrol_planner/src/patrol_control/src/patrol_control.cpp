@@ -1916,10 +1916,11 @@ void LLController::load_params() {
     drop_settle_config_.max_horizontal_speed_mps = 0.05;
     drop_settle_config_.max_vertical_speed_mps = 0.10;
     drop_settle_config_.stable_duration_sec = 0.30;
-    // Final release uses only xy_tolerance_m and max_odom_age_sec from
-    // this shared config. Pre-descent horizontal stability has its own config.
+    // Shared release config keeps legacy XY gates when height-only is disabled.
+    // Pre-descent horizontal stability has its own independent config.
     load_stability("drop_system/settle", &drop_settle_config_);
     drop_compensate_before_descent_ = nh_.param("drop_system/compensate_before_descent", true);
+    drop_release_height_only_ = nh_.param("drop_system/release_height_only", true);
     drop_red_cross_xy_tolerance_m_ = nh_.param(
         "drop_system/settle/red_cross_xy_tolerance_m", 0.04);
     if (!std::isfinite(drop_red_cross_xy_tolerance_m_) || drop_red_cross_xy_tolerance_m_ <= 0.0)
@@ -3810,28 +3811,31 @@ bool LLController::compensatedDropSettled(bool release, double* error, double* s
         return result.ready;
     }
     const double xy_tolerance = compensatedDropXYTolerance();
+    // Pre-descent XY/speed stability remains mandatory in serial mode.
+    // Once descending, height-only release ignores horizontal error magnitude;
+    // fresh feedback, bound context, flight-state and actuator permission stay.
     const bool ready = std::isfinite(xy_error) && std::isfinite(horizontal_speed) &&
-        std::isfinite(pos.z) && xy_error < xy_tolerance &&
+        std::isfinite(pos.z) && (drop_release_height_only_ || xy_error < xy_tolerance) &&
         (!require_release_height ||
          (pos.z >= drop_release_min_height_ && pos.z <= drop_height_threshold)) &&
         externalLandingControlReady(ros::Time::now());
     if (!ready) ROS_INFO_THROTTLE(1.0,
         "[DropGeometry] waiting: xy=%.3f speed=%.3f vz=%.3f fc_z=%.3f floor_z=%.3f ceiling_z=%.3f "
-        "xy_tolerance=%.3f class=%s",
+        "xy_tolerance=%.3f class=%s release_xy_check=%s",
         xy_error,horizontal_speed,velocity.z(),pos.z,drop_release_min_height_,drop_height_threshold,
-        xy_tolerance,b.semantic_target_class.c_str());
+        xy_tolerance,b.semantic_target_class.c_str(),drop_release_height_only_ ? "disabled" : "enabled");
     else if (require_release_height) ROS_INFO(
         "[DropGeometry] release_ready slot=%u decision=%u fc_xy_error=%.4f outlet_xy_error=%.4f "
         "horizontal_speed=%.4f vz=%.4f fc_z=%.4f floor_z=%.4f ceiling_z=%.4f odom=%.6f "
-        "xy_tolerance=%.3f class=%s",
+        "xy_tolerance=%.3f class=%s release_xy_check=%s",
         c.payload_slot,c.decision_seq,fc_error,outlet_error,horizontal_speed,velocity.z(),
         pos.z,drop_release_min_height_,drop_height_threshold,motion_odom_.header.stamp.toSec(),
-        xy_tolerance,b.semantic_target_class.c_str());
+        xy_tolerance,b.semantic_target_class.c_str(),drop_release_height_only_ ? "disabled" : "enabled");
     return ready;
 }
 
 double LLController::compensatedDropCommandHeight() {
-    // One-way within this action: later XY/feedback rejection blocks release,
+    // One-way within this action: invalid feedback/context still blocks release,
     // but must never command a climb back to visual capture height.
     if (drop_descent_started_) return drop_release_setpoint_height_;
     if (!compensated_goal_frozen_) return external_alignment_capture_height_;

@@ -2,10 +2,6 @@
 drop_timeout:
   enabled: true
   lock_timeout_sec: 20.0
-  height_rate_threshold: 0.15  # |h(t)-h(t-1s)| / h(t-1s)，h为FC离地高度
-  stall_start_height_m: 0.60 # 仅FC离地高度严格低于60cm时计5秒
-  stall_timeout_sec: 5.0      # 严格超过5秒；恢复到>=15%后重新计时
-  ground_z: 0.0              # 正式/试飞生成器按地面标定覆盖
 evidence_timeout: 0.50       # release_evidence 最大年龄 [s]
 pose_timeout: 0.50           # 飞机位姿最大年龄 [s]
 control_state_timeout: 0.50  # 旧 patrol_control 状态最大年龄 [s]

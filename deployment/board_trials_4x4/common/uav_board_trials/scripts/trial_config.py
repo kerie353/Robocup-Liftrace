@@ -311,7 +311,6 @@ def generate(root,out,settings,fc_xyz,rig):
         '/fast_planner_node/progress/enabled':True,'/traj_server/progress/enabled':True,
         '/traj_server/traj_server/require_goal_identity':True,
         '/navigation/planner_bridge/target/recovery_height':low,
-        '/release_permission_arbiter/drop_timeout/ground_z':ground,
         '/release_permission_arbiter/pose_topic':'/navigation/local_pose','/release_permission_arbiter/min_release_altitude':ground+permission_min,'/release_permission_arbiter/max_release_altitude':ground+permission_max,
         '/board_trials/ground_z':ground,'/board_trials/fc_on_ground_z':z,'/board_trials/mock_only':actuator=='mock',
         '/board_trials/actuator_mode':actuator,

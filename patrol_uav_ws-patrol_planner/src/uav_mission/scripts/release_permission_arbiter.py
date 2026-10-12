@@ -39,15 +39,8 @@ class ReleasePermissionArbiter:
         rospy.init_node("release_permission_arbiter")
 
         self._drop_timeout_enabled = bool(rospy.get_param("~drop_timeout/enabled", True))
-        self._drop_ground_z = float(rospy.get_param("~drop_timeout/ground_z", 0.0))
-        if not math.isfinite(self._drop_ground_z):
-            raise ValueError("drop_timeout/ground_z must be finite")
         self._drop_timeout = DropTimeout(
-            float(rospy.get_param("~drop_timeout/lock_timeout_sec", 20.0)),
-            float(rospy.get_param("~drop_timeout/height_rate_threshold", 0.15)),
-            float(rospy.get_param("~drop_timeout/stall_timeout_sec", 5.0)),
-            float(rospy.get_param("~pose_timeout", 0.5)),
-            float(rospy.get_param("~drop_timeout/stall_start_height_m", 0.60)))
+            float(rospy.get_param("~drop_timeout/lock_timeout_sec", 20.0)))
         self._alignment_context = None
 
         self._evidence_timeout = float(rospy.get_param("~evidence_timeout", 0.5))
@@ -431,13 +424,7 @@ class ReleasePermissionArbiter:
         # Advance the lock clock even when ordinary visual/control evidence is absent.
         timer = getattr(self, "_drop_timeout", None)
         if timer is not None:
-            pose = self._pose
-            context = getattr(self, "_alignment_context", None)
-            if context is None or (pose is not None and pose.header.frame_id != context.header.frame_id):
-                pose = None
-            timer.update(now.to_sec(),
-                pose.header.stamp.to_sec() if pose is not None else None,
-                pose.pose.position.z - self._drop_ground_z if pose is not None else None)
+            timer.update(now.to_sec())
         if self._next_slot > self._payload_slots:
             return False, "payload_exhausted", None
         if self._next_slot in self._blocked_slots:

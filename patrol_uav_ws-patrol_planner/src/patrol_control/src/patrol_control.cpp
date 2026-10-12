@@ -4337,7 +4337,7 @@ bool LLController::forcedDropAuthorized() const {
     const auto& c = servo_alignment_context_;
     return external_mission_mode_ && require_vision_release_permission_ &&
         Drone_mode == Aligning && hasFreshMissionReleasePermission() &&
-        (p.reason == "forced_drop_lock_timeout" || p.reason == "forced_drop_height_stall") &&
+        p.reason == "forced_drop_lock_timeout" &&
         c.deadline > ros::Time::now() &&
         c.decision_seq == servo_alignment_decision_seq_ &&
         c.semantic_target_id == servo_alignment_target_id_ &&

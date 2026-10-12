@@ -132,7 +132,9 @@ int main(int argc,char**argv){
   assert(c.async_servo_.calls==0);assert(c.forced_drop_active_);
  }else if(name=="height_stall"){
   c.release_authorization_.reason="forced_drop_height_stall";
-  assert(c.forcedDropTick());assert(c.async_servo_.calls==1);
+  assert(!c.forcedDropTick());
+  assert(c.executeDropAction(1)==DropActionResult::kPending);
+  assert(c.async_servo_.calls==0);
  }else return 2;
 }
 '''
@@ -155,5 +157,5 @@ class ForcedDrop(unittest.TestCase):
  def test_ack(self):self.run_case('ack')
  def test_unknown(self):self.run_case('unknown')
  def test_inflight(self):self.run_case('inflight')
- def test_height_stall(self):self.run_case('height_stall')
+ def test_removed_height_stall_cannot_bypass_geometry(self):self.run_case('height_stall')
 if __name__=='__main__':unittest.main()

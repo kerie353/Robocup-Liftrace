@@ -16,63 +16,29 @@ from test_release_transaction_followups import (
 class TimeoutPolicy(unittest.TestCase):
     def setUp(self):
         self.p=DropTimeout();self.p.bind(('m',1),100.)
-    def feed(self, heights):
-        for i,h in enumerate(heights):
-            t=100+i/10;reason=self.p.update(t,t,h)
-        return reason
     def test_twenty_seconds_and_renewal(self):
         self.assertEqual(self.p.update(119.999),'')
         self.p.bind(('m',1),119.999)
         self.assertEqual(self.p.update(120.),'forced_drop_lock_timeout')
-    def test_stall_strictly_exceeds_five_after_one_second_warmup(self):
-        self.assertEqual(self.feed([.5]*61),'')
-        self.assertEqual(self.p.update(106.1,106.1,.5),'forced_drop_height_stall')
-    def test_ascent_descent_above_threshold(self):
-        for sign in (-1,1):
-            self.setUp()
-            self.assertEqual(self.feed([(.1 if sign>0 else .5)*(1+sign*.25)**(i/10) for i in range(80)]),'')
-    def test_exact_fifteen_percent_restarts_stall(self):
-        self.feed([.5]*55);self.p.update(105.5,105.5,.575)
-        self.assertIsNone(self.p.low_since)
-    def test_stale_duplicate_and_out_of_order(self):
-        self.feed([.5]*30)
-        for t in (103.,104.,105.,106.,107.):
-            self.assertEqual(self.p.update(t,102.9,.5),'')
-        self.assertIsNone(self.p.low_since)
-        self.assertEqual(self.p.update(107.,102.,.5),'')
-    def test_gap_invalid_height_and_new_identity(self):
-        for bad in (float('nan'),0.,-.1):
-            self.setUp();self.feed([.5]*55);self.p.update(105.5,105.5,bad)
-            self.assertIsNone(self.p.low_since)
-        self.setUp();self.feed([.5]*55);self.p.update(106.5,106.5,.5)
-        self.assertIsNone(self.p.low_since)
-        self.p.bind(('m',2),129.);self.assertEqual(self.p.update(130.),'')
+    def test_new_identity_and_reset_clear_old_timeout(self):
+        self.assertEqual(self.p.update(120.),'forced_drop_lock_timeout')
+        self.p.bind(('m',2),121.)
+        self.assertEqual(self.p.update(140.999),'')
+        self.assertEqual(self.p.update(141.),'forced_drop_lock_timeout')
+        self.p.reset();self.assertEqual(self.p.update(500.),'')
     def test_clock_rollback_latches_until_new_identity(self):
-        self.p.update(102.,102.,.5);self.assertEqual(self.p.update(101.),'')
+        self.p.update(102.);self.assertEqual(self.p.update(101.),'')
         self.assertEqual(self.p.update(131.),'')
         self.p.bind(('m',2),131.);self.assertEqual(self.p.update(151.),'forced_drop_lock_timeout')
-    def test_irregular_sampling_interpolates_one_second(self):
-        for t in (100.,100.3,100.6,100.9,101.2,101.5):self.p.update(t,t,.5)
-        self.assertEqual(self.p.low_since,101.2)
-    def test_sixty_cm_exclusive_gate(self):
-        for height in (.60,.61,1.4):
-            self.setUp()
-            self.assertEqual(self.feed([height]*90),'')
-            self.assertIsNone(self.p.low_since)
-        self.setUp();self.feed([.60]*30)
-        for i in range(30,81):
-            t=100+i/10;self.assertEqual(self.p.update(t,t,.59),'')
-        self.assertEqual(self.p.update(108.1,108.1,.59),'forced_drop_height_stall')
-    def test_climb_back_to_sixty_cm_restarts_five_seconds(self):
-        self.feed([.59]*55)
-        self.p.update(105.5,105.5,.60)
-        self.assertIsNone(self.p.low_since)
-        for i in range(56,107):
-            t=100+i/10;self.assertEqual(self.p.update(t,t,.59),'')
-        self.assertEqual(self.p.update(110.7,110.7,.59),'forced_drop_height_stall')
-    def test_invalid_parameters(self):
-        for args in ((0,.15,5,.5),(30,1.1,5,.5),(30,.15,float('nan'),.5)):
-            with self.assertRaises(ValueError):DropTimeout(*args)
+    def test_paused_clock_never_advances_timeout(self):
+        for _ in range(100):self.assertEqual(self.p.update(110.),'')
+        self.assertEqual(self.p.update(119.999),'')
+        self.assertEqual(self.p.update(120.),'forced_drop_lock_timeout')
+    def test_invalid_clock_and_parameters(self):
+        for value in (0.,-1.,float('nan'),float('inf')):
+            with self.assertRaises(ValueError):DropTimeout(value)
+        self.assertEqual(self.p.update(float('nan')),'')
+        self.assertEqual(self.p.update(120.),'')
 
 
 class TimeoutTransaction(unittest.TestCase):
@@ -83,7 +49,7 @@ class TimeoutTransaction(unittest.TestCase):
         c.target_pose=N(header=N(frame_id='camera_init'))
         c.deadline=Stamp(190.);c.target_observation_stamp=Stamp(99.9)
         self.a=a=ARB.__new__(ARB)
-        a._drop_timeout_enabled=True;a._drop_ground_z=-.2;a._drop_timeout=DropTimeout()
+        a._drop_timeout_enabled=True;a._drop_timeout=DropTimeout()
         a._alignment_context=None;a._require_evidence_context=True;a._class_profile='r2026'
         a._next_slot=1;a._payload_slots=3;a._blocked_slots=set();a._revoked_actions=set()
         a._authorized_actions={};a._called_actions={};a._released_targets=set();a._completed_slots=set()
@@ -94,7 +60,8 @@ class TimeoutTransaction(unittest.TestCase):
         a._pose=N(header=N(stamp=Stamp(100.),frame_id='camera_init'),pose=N(position=N(x=0.,y=0.,z=1.2)))
         a._permission_epoch='test';a._permission_revision=0;a._permission_lifetime=.25
         a._permission_pub=Publisher();a._authorization_pub=Publisher();a._permission_state_pub=Publisher()
-        a._current_evidence_source=lambda now:self.fail('forced path reached normal visual gate')
+        a._current_evidence_source=lambda now:(False,'no_release_evidence',None)
+        a._commitment_policy=N(evaluate=lambda **kwargs:(False,'no_release_commitment'))
         ARB._evaluate.__globals__['MODE_TARGET_CLASS']={'drop_circle':'circle','drop_cross':'red_cross'}
         ARB._on_alignment_context.__globals__['AlignmentTargetContext']=N(SCHEMA_VERSION=1,ALIGN=2)
         a._on_alignment_context(c)
@@ -111,11 +78,16 @@ class TimeoutTransaction(unittest.TestCase):
     def test_grants_without_visual_or_release_altitude(self):
         allowed,reason,source=self.force();self.assertTrue(allowed)
         self.assertEqual(reason,'forced_drop_lock_timeout');self.assertEqual(source['decision_seq'],self.c.decision_seq)
-    def test_height_rate_uses_agl(self):
-        for i in range(62):
-            t=100+i/10;self.advance(t,.3 if i==0 else .23)
-            self.a._drop_timeout.update(t,t,self.a._pose.pose.position.z+.2)
-        self.assertEqual(self.a._evaluate(Stamp(106.1))[1],'forced_drop_height_stall')
+    def test_low_height_hover_never_forces_before_twenty_seconds(self):
+        for height in (.1,.43,.59,.60,1.4):
+            self.setUp()
+            for i in range(1,200):
+                t=100+i/10;self.advance(t,height)
+                self.assertFalse(self.a._evaluate(Stamp(t))[0])
+                self.assertEqual(self.a._drop_timeout.reason,'')
+            self.advance(120.,height)
+            allowed,reason,_=self.a._evaluate(Stamp(120.))
+            self.assertTrue(allowed);self.assertEqual(reason,'forced_drop_lock_timeout')
     def test_published_identity_ignores_old_visual_context(self):
         self.force();self.a._evidence_context=N(mission_id='wrong',decision_seq=900,attempt=1,
             semantic_target_first_seen=Stamp(1),semantic_target_id=999,semantic_target_class='tent')
@@ -182,7 +154,7 @@ class TimeoutConfiguration(unittest.TestCase):
             with tempfile.TemporaryDirectory() as out:
                 ref=gen(self.ROOT,out,settings,fc,rig)
                 params=yaml.safe_load((Path(out)/'overrides.yaml').read_text())
-                self.assertEqual(params['/release_permission_arbiter/drop_timeout/ground_z'],ref['ground_z'])
+                self.assertNotIn('/release_permission_arbiter/drop_timeout/ground_z',params)
                 control=yaml.safe_load((Path(out)/'control.yaml').read_text())['drop_system']
                 self.assertAlmostEqual(control['release_setpoint_height']-ref['ground_z'],settings['drop_agl'])
     def test_competition_ground_reference(self):

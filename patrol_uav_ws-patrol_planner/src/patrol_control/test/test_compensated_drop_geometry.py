@@ -134,6 +134,9 @@ public:
  bool external_mission_mode_=true,compensated_alignment_enabled_=true;
  bool compensated_goal_valid_=false,compensated_goal_frozen_=false;
  bool drop_compensate_before_descent_=true,drop_descent_started_=false;
+ bool forcedDropAuthorized() const { return false; }
+ bool forcedDropControlReady() const { return true; }
+ bool forced_drop_active_=false;
  bool drop_release_height_only_=true;
  DropDescentConfig drop_descent_config_;
  DropDescentProfile drop_descent_profile_;

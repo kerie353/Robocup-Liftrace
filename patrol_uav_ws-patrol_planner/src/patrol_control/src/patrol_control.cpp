@@ -469,6 +469,8 @@ void LLController::externalMissionTick() {
         return;
     }
 
+    if (forcedDropTick()) return;
+
     if (compensated_alignment_enabled_ &&
         (compensated_goal_valid_ || compensated_target_outside_boundary_) && !servo_action_attempted_) {
         const auto& c = servo_alignment_context_;
@@ -4330,16 +4332,82 @@ void LLController::servoAlignmentContextCallback(
     have_servo_alignment_context_ = true;
 }
 
+bool LLController::forcedDropAuthorized() const {
+    const auto& p = release_authorization_;
+    const auto& c = servo_alignment_context_;
+    return external_mission_mode_ && require_vision_release_permission_ &&
+        Drone_mode == Aligning && hasFreshMissionReleasePermission() &&
+        (p.reason == "forced_drop_lock_timeout" || p.reason == "forced_drop_height_stall") &&
+        c.deadline > ros::Time::now() &&
+        c.decision_seq == servo_alignment_decision_seq_ &&
+        c.semantic_target_id == servo_alignment_target_id_ &&
+        c.semantic_target_class == servo_alignment_target_class_;
+}
+
+bool LLController::forcedDropControlReady() const {
+    Eigen::Vector3d velocity, angular;
+    return freshMotion(&velocity, &angular) &&
+        nearWallAlignReleaseAllowed(near_wall_align_fence_, uav_pose);
+}
+
+bool LLController::forcedDropTick() {
+    if (!forced_drop_active_ && !forcedDropAuthorized()) return false;
+    if (!forced_drop_active_) {
+        forced_drop_active_ = true;
+        forced_drop_hold_ = uav_pose;
+        drop_descent_profile_.reset();
+        ROS_WARN("[DropTimeout] %s slot=%u decision=%u fc_z=%.3f; request once then recover on ACK",
+            release_authorization_.reason.c_str(), release_authorization_.payload_slot,
+            release_authorization_.decision_seq, uav_pose.pose.position.z);
+    }
+    // Hold measured XY/Z during the RPC rather than continuing descent.
+    patrol_cmd = forced_drop_hold_;
+    align_height = forced_drop_hold_.pose.position.z;
+    adjust_target_position[0] = forced_drop_hold_.pose.position.x;
+    adjust_target_position[1] = forced_drop_hold_.pose.position.y;
+    adjust_target_position[2] = align_height;
+    if (!drop_complete) {
+        if (forcedDropAuthorized()) executeDropAction(servo_alignment_context_.payload_slot);
+        return true;
+    }
+    // A matching physical ACK remains mandatory; Bridge may have revoked context already.
+    align_height = current_task_type == CROSS_MISSION
+        ? external_cross_recovery_setpoint_height_ : external_standard_recovery_setpoint_height_;
+    patrol_cmd.pose.position.z = align_height;
+    adjust_target_position[2] = align_height;
+    Eigen::Vector3d velocity, angular;
+    if (!servo_complete.data || !freshMotion(&velocity, &angular) ||
+        !externalLandingControlReady(ros::Time::now()) ||
+        uav_pose.pose.position.z < external_recovery_height_) return true;
+    const bool cross = current_task_type == CROSS_MISSION;
+    const double recovery_setpoint = align_height;
+    resetDropState();
+    if (cross) {
+        cleanupAfterCrossDrop();
+        cross_drop_completed = cross_mission_completed = true;
+    }
+    align_height = recovery_setpoint;
+    ++detect_point_counter;
+    external_waiting_for_motion_ = true;
+    external_planner_height_hold_active_ = false;
+    have_planner_cmd = false;
+    mavros_point_cmd = last_mavros_point_cmd = patrol_cmd;
+    Drone_mode = Run_point;
+    return true;
+}
+
 DropActionResult LLController::executeDropAction(int servo_id) {
     if (servo_id < 1 || servo_id > 3) return DropActionResult::kInvalidServoId;
     if (servo_action_attempted_) {
         return servo_action_slot_ == servo_id ? servo_action_result_
                                              : DropActionResult::kRejected;
     }
-    if (external_mission_mode_ && compensated_alignment_enabled_ &&
+    const bool forced = forcedDropAuthorized();
+    if (!forced && external_mission_mode_ && compensated_alignment_enabled_ &&
         drop_compensate_before_descent_ && !drop_descent_started_) return DropActionResult::kPending;
-    if (external_mission_mode_ && compensated_alignment_enabled_ &&
+    if (!forced && external_mission_mode_ && compensated_alignment_enabled_ &&
         !compensatedDropSettled(true)) return DropActionResult::kPending;
+    if (forced && !forcedDropControlReady()) return DropActionResult::kRejected;
     // Receiving a fresh release permission is not permission to actuate after
     // RC takeover/disarm/disconnect. Use the existing flight-state age gate.
     if (!externalLandingControlReady(ros::Time::now())) return DropActionResult::kRejected;
@@ -4490,6 +4558,7 @@ void LLController::stopDropAction(int servo_id) {
 }
 
 void LLController::resetDropState() {
+    forced_drop_active_ = false;
     compensated_target_outside_boundary_ = false;
     compensated_goal_valid_ = compensated_goal_frozen_ = false;
     drop_descent_started_ = false;
@@ -4765,6 +4834,7 @@ void LLController::resetCrossDetectionState() {
 }
 
 void LLController::resetDetectionState() {
+    forced_drop_active_ = false;
     compensated_target_outside_boundary_ = false;
     compensated_goal_valid_ = compensated_goal_frozen_ = false;
     drop_descent_started_ = false;

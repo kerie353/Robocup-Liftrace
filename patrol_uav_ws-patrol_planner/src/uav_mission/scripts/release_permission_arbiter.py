@@ -5,11 +5,13 @@ The vision node publishes ReleaseEvidence.  This arbiter adds mission mode,
 vehicle pose, payload sequencing and replay checks, then publishes a short
 lived ReleasePermission.  It never calls an actuator.
 """
+import math
 import os
 import sys
 import threading
 import uuid
 from patrol_control.msg import ReleaseAuthorization
+from uav_mission.drop_timeout import DropTimeout
 
 import rospy
 from geometry_msgs.msg import PoseStamped
@@ -35,6 +37,18 @@ from release_commitment import (
 class ReleasePermissionArbiter:
     def __init__(self):
         rospy.init_node("release_permission_arbiter")
+
+        self._drop_timeout_enabled = bool(rospy.get_param("~drop_timeout/enabled", True))
+        self._drop_ground_z = float(rospy.get_param("~drop_timeout/ground_z", 0.0))
+        if not math.isfinite(self._drop_ground_z):
+            raise ValueError("drop_timeout/ground_z must be finite")
+        self._drop_timeout = DropTimeout(
+            float(rospy.get_param("~drop_timeout/lock_timeout_sec", 30.0)),
+            float(rospy.get_param("~drop_timeout/height_rate_threshold", 0.15)),
+            float(rospy.get_param("~drop_timeout/stall_timeout_sec", 5.0)),
+            float(rospy.get_param("~pose_timeout", 0.5)),
+            float(rospy.get_param("~drop_timeout/stall_start_height_m", 0.60)))
+        self._alignment_context = None
 
         self._evidence_timeout = float(rospy.get_param("~evidence_timeout", 0.5))
         self._pose_timeout = float(rospy.get_param("~pose_timeout", 0.5))
@@ -179,13 +193,36 @@ class ReleasePermissionArbiter:
             self._maybe_establish_commitment()
 
     def _on_alignment_context(self, msg):
-        if msg.active:
-            return
         key = (str(msg.mission_id), int(msg.decision_seq), int(msg.attempt),
                int(msg.payload_slot), int(msg.semantic_target_id),
                int(msg.semantic_target_first_seen.to_nsec()), str(msg.semantic_target_class))
         with self._lock:
+            if msg.active:
+                now = rospy.Time.now()
+                if (not self._require_evidence_context or
+                        msg.schema_version != AlignmentTargetContext.SCHEMA_VERSION or
+                        msg.command != AlignmentTargetContext.ALIGN or not msg.has_target or
+                        not msg.mission_id or msg.decision_seq <= 0 or msg.attempt <= 0 or
+                        msg.semantic_target_first_seen.to_sec() <= 0 or
+                        msg.class_profile != self._class_profile or
+                        msg.semantic_target_class not in ("red_cross", "tent", "pillbox", "bridge", "panzer") or
+                        msg.align_mode != ("drop_cross" if msg.semantic_target_class == "red_cross" else "drop_circle") or
+                        msg.payload_slot != self._next_slot or key in self._revoked_actions or
+                        msg.deadline <= now or
+                        not 0 <= (now - msg.header.stamp).to_sec() <= self._evidence_timeout or
+                        msg.header.frame_id != msg.target_pose.header.frame_id or
+                        not msg.header.frame_id):
+                    return
+                self._alignment_context = msg
+                self._drop_timeout.bind(key, now.to_sec())
+                return
             self._revoked_actions.add(key)
+            active = getattr(self, "_alignment_context", None)
+            if active is not None and (str(active.mission_id), int(active.decision_seq),
+                    int(active.attempt), int(active.payload_slot), int(active.semantic_target_id),
+                    int(active.semantic_target_first_seen.to_nsec()), str(active.semantic_target_class)) == key:
+                self._alignment_context = None
+                self._drop_timeout.reset()
             c = self._commitment
             if c is not None and (c.mission_id, c.decision_seq, c.attempt,
                     c.payload_slot, c.target_id, c.target_first_seen_nsec, c.target_class) == key:
@@ -367,7 +404,40 @@ class ReleasePermissionArbiter:
                 stamp_nsec % 1000000000),
         }
 
+    def _forced_source(self, now):
+        c = getattr(self, "_alignment_context", None)
+        if (not getattr(self, "_drop_timeout_enabled", False) or
+                not self._require_evidence_context or c is None):
+            return None
+        key = (str(c.mission_id), int(c.decision_seq), int(c.attempt),
+               int(c.payload_slot), int(c.semantic_target_id),
+               int(c.semantic_target_first_seen.to_nsec()), str(c.semantic_target_class))
+        if (key in self._revoked_actions or c.payload_slot != self._next_slot or
+                c.align_mode != self._align_mode or c.deadline <= now or
+                not 0 <= (now - c.header.stamp).to_sec() <= self._evidence_timeout or
+                self._pose.header.frame_id != c.header.frame_id):
+            return None
+        reason = self._drop_timeout.reason
+        if not reason:
+            return None
+        if (self._align_mode, c.semantic_target_id) in self._released_targets:
+            return None
+        return reason, dict(target_id=c.semantic_target_id,
+            target_class=c.semantic_target_class, evidence_stamp=c.target_observation_stamp,
+            mission_id=c.mission_id, decision_seq=c.decision_seq, attempt=c.attempt,
+            target_first_seen=c.semantic_target_first_seen)
+
     def _evaluate(self, now):
+        # Advance the lock clock even when ordinary visual/control evidence is absent.
+        timer = getattr(self, "_drop_timeout", None)
+        if timer is not None:
+            pose = self._pose
+            context = getattr(self, "_alignment_context", None)
+            if context is None or (pose is not None and pose.header.frame_id != context.header.frame_id):
+                pose = None
+            timer.update(now.to_sec(),
+                pose.header.stamp.to_sec() if pose is not None else None,
+                pose.pose.position.z - self._drop_ground_z if pose is not None else None)
         if self._next_slot > self._payload_slots:
             return False, "payload_exhausted", None
         if self._next_slot in self._blocked_slots:
@@ -386,6 +456,16 @@ class ReleasePermissionArbiter:
         pose_age = self._stamp_age(now, self._pose.header.stamp)
         if pose_age > self._pose_timeout:
             return False, "stale_vehicle_pose", None
+
+        p = self._pose.pose.position
+        if (not all(math.isfinite(v) for v in (p.x, p.y, p.z)) or
+                (now - self._pose.header.stamp).to_sec() < 0 or
+                (now - self._control_state_stamp).to_sec() < 0):
+            return False, "invalid_vehicle_feedback", None
+        forced = self._forced_source(now)
+        if forced is not None:
+            reason, source = forced
+            return True, reason, source
 
         current_valid, current_reason, source = \
             self._current_evidence_source(now)
@@ -479,7 +559,8 @@ class ReleasePermissionArbiter:
             if "mission_id" in source:
                 for name in ("mission_id", "decision_seq", "attempt", "target_first_seen"):
                     setattr(msg, name, source[name])
-        if self._require_evidence_context and self._evidence_context is not None:
+        if ((source is None or "mission_id" not in source) and self._require_evidence_context and
+                self._evidence_context is not None):
             context = self._evidence_context
             msg.mission_id = context.mission_id
             msg.decision_seq = context.decision_seq

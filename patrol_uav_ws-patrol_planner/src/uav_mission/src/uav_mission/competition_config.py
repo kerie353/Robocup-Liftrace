@@ -233,6 +233,7 @@ def generate(root,out,settings,fc_xyz,rig):
         '/fast_planner_node/fsm/server_hold_seconds':.25,'/fast_planner_node/fsm/server_progress_max_age':.5,
         '/fast_planner_node/progress/enabled':True,'/traj_server/progress/enabled':True,'/traj_server/traj_server/require_goal_identity':True,
         '/navigation/planner_bridge/target/recovery_height':low,
+        '/release_permission_arbiter/drop_timeout/ground_z':ground,
         '/release_permission_arbiter/pose_topic':'/navigation/local_pose','/release_permission_arbiter/min_release_altitude':ground+permission_min,'/release_permission_arbiter/max_release_altitude':ground+permission_max,
         '/target_map_projector/coarse_navigation_enabled':True,'/target_map_projector/coarse_min_confidence':policy['coarse_min_confidence'],
         '/target_memory/search_confirmation_max_gap_sec':1.,'/drop_aligner/stable_frames':5,

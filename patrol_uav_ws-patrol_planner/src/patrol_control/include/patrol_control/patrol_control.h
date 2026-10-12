@@ -532,6 +532,11 @@ private:
     bool DynamicProcess();
 
     // 投递相关函数
+    bool forcedDropAuthorized() const;
+    bool forcedDropControlReady() const;
+    bool forcedDropTick();
+    bool forced_drop_active_ = false;
+    geometry_msgs::PoseStamped forced_drop_hold_;
     DropActionResult executeDropAction(int servo_id);  // 执行投递动作
     void applyDropSlotOffset(int servo_id, bool dynamic_target);
     bool checkDropCondition();                 // 检查投递条件

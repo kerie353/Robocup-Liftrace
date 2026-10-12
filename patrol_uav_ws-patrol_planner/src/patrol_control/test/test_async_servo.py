@@ -138,6 +138,8 @@ public:
     bool compensated_alignment_enabled_=true, geometry_ready=true;
     // Async-only fixture uses explicit simultaneous compatibility mode.
     bool drop_compensate_before_descent_=false, drop_descent_started_=false;
+    bool forcedDropAuthorized() const { return false; }
+    bool forcedDropControlReady() const { return true; }
     bool compensatedDropSettled(bool) { return geometry_ready; }
     void publishCompensatedAlignment() {}
     std::string external_landing_handoff_mode_="AUTO.LAND";
@@ -163,6 +165,15 @@ public:
     Pose mavros_point_cmd;
     Publisher mavros_point_cmd_pub;
     void timerPublicationPath();
+    // Transport-only fixture: existing H/raw branches stay inactive.
+    struct { int mode=1; } landing_descent_config_;
+    bool vertical_landing=false, zero_velocity_drop=false;
+    std::string external_landing_frame_="camera_init";
+    Publisher landing_vertical_cmd_pub_, drop_vertical_cmd_pub_;
+    bool externalLandingOffboardStateReady(ros::Time) const { return true; }
+    void externalLandingOffboardTick() {}
+    bool externalLandingOffboardDescentReady() const { return false; }
+    void publishExternalLandingOffboardSetpoint() {}
     bool control_ready=true;
     bool external_mission_mode_=true, external_landing_active_=false;
     bool external_landing_auto_land_requested_=false, external_landing_cancelled_=false;

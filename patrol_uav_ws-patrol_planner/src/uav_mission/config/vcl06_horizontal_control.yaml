@@ -18,6 +18,7 @@ max_yaw_change: 0.20
 # 外部任务由 switch/auto_land=true 启用 AUTO.LAND；
 # H 证据必须来自 camera_init、晚于 LAND 命令并持续满足新鲜度与稳定帧数。
 external_landing:
+  alignment_mode: low  # high requires POSCTL and the navigation frame adapter
   frame: camera_init
   # 正式链直接消费视觉 typed map detection；旧 PoseStamped 仅留 legacy 模式。
   detections_topic: /uav_vision/detections_mapped

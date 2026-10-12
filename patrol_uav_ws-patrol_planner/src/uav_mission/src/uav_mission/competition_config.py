@@ -209,6 +209,7 @@ def generate(root,out,settings,fc_xyz,rig):
     control['external_landing'].update(frame=rig['mission_frame'],capture_height=capture,auto_land_height=handoff_z,detections_topic='/uav_vision/detections_mapped',handoff_mode=settings.get('landing_handoff_mode','AUTO.LAND'))
     if posctl_stability is not None:
         control['external_landing']['posctl'] = posctl_stability
+    control['external_landing']['alignment_mode'] = settings.get('landing_alignment_mode', 'low')
     overrides={
         '/landing_detector/landing_enable_h_stroke_fallback':settings['landing_enable_h_stroke_fallback'],
         '/fast_planner_node/sdf_map/resolution':.10,

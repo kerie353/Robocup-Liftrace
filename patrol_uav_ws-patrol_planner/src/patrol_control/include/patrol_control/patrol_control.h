@@ -9,6 +9,7 @@
 #include "patrol_control/near_wall_align.h"
 #include "patrol_control/drop_slot_geometry.h"
 #include "patrol_control/landing_handoff_stability.h"
+#include "patrol_control/landing_high_alignment.h"
 #include "patrol_control/drop_pre_descent_stability.h"
 #include <nav_msgs/Odometry.h>
 #include <uav_vision/DropAlignmentFeedback.h>
@@ -293,6 +294,10 @@ private:
     bool external_planner_height_hold_active_ = false;
     geometry_msgs::PoseStamped external_planner_height_hold_;
     std::string external_landing_frame_ = "camera_init";
+    std::string external_landing_alignment_mode_ = "low";
+    LandingHighAlignmentWindow landing_high_alignment_window_;
+    ros::Publisher landing_vertical_cmd_pub_;
+    bool highLandingAlignmentReady();
     double external_landing_capture_height_ = 0.75;
     double external_landing_watchdog_timeout_sec_ = 120.0;
     double external_landing_mark_max_age_sec_ = 0.5;

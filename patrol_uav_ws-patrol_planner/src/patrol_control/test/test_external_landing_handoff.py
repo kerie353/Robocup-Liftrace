@@ -134,6 +134,9 @@ public:
     bool flag_land=false, flag_takeoff_done=true, have_land_mark=false;
     bool have_planner_cmd=false, have_waypoint_mark=false, have_cross_mark=false;
     bool align_ok=false;
+    std::string external_landing_alignment_mode_="low";
+    SettlementWindowStub landing_high_alignment_window_;
+    bool highLandingAlignmentReady() { return false; }
     SettlementWindowStub landing_capture_window_, landing_handoff_window_;
     bool landing_motion_settled_=true;
     int capture_settle_calls_=0, handoff_settle_calls_=0;

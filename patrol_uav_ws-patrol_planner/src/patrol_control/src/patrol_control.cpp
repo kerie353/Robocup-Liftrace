@@ -219,6 +219,9 @@ void LLController::initializeNode() {
             });
     }
     mavros_point_cmd_pub = nh_.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local", 50);//px4 直接接收
+    landing_vertical_cmd_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(
+        nh_.param<std::string>("external_landing/vertical_setpoint_topic",
+            "/navigation/landing_setpoint_vertical"), 1);
     if (!external_mission_mode_) {
         detect_sub_ = nh_.subscribe(
             "/detect/waypoint_mark_point", 1,
@@ -621,6 +624,7 @@ void LLController::clearExternalLandingState(bool disable_detector) {
     external_landing_active_ = false;
     external_landing_new_mark_ = false;
     external_landing_alignment_complete_ = false;
+    landing_high_alignment_window_.reset();
     landing_capture_window_.reset();
     landing_handoff_window_.reset();
     external_landing_auto_land_requested_ = false;
@@ -751,10 +755,14 @@ void LLController::externalLandingTick() {
     // latched for the remainder of this LAND transaction.
     if (!mark_fresh && !external_landing_alignment_complete_) {
         external_landing_stable_count_ = 0;
+        landing_high_alignment_window_.reset();
     }
 
-    // Original acquisition: ten fresh H frames and XY alignment, then freeze.
-    // High-view height tolerance remains independent knowledge, not a motion window.
+    const bool high_mode = external_landing_alignment_mode_ == "high";
+    const bool high_ready = high_mode && !external_landing_alignment_complete_ &&
+        highLandingAlignmentReady();
+    // Low acquisition retains ten fresh aligned frames. High acquisition uses
+    // its independent one-second horizontal window, then freezes on a new H frame.
     if (external_landing_new_mark_) {
         if (mark_fresh && !external_landing_alignment_complete_) {
             const double horizontal_error = std::hypot(
@@ -766,7 +774,7 @@ void LLController::externalLandingTick() {
             } else {
                 external_landing_stable_count_ = 0;
             }
-            if (external_landing_stable_count_ >=
+            if (high_mode ? high_ready : external_landing_stable_count_ >=
                 external_landing_stable_frames_) {
                 external_landing_alignment_complete_ = true;
                 external_landing_aligned_goal_ = land_mark_point;
@@ -781,6 +789,8 @@ void LLController::externalLandingTick() {
                     external_landing_aligned_goal_.pose.position.x,
                     external_landing_aligned_goal_.pose.position.y,external_landing_capture_height_,
                     land_height,external_landing_auto_land_height_,uav_pose.pose.position.z);
+                ROS_INFO("[ExternalLanding] alignment_mode=%s; descent_xy_control=%s",
+                    external_landing_alignment_mode_.c_str(), high_mode ? "disabled" : "position");
             }
         }
         external_landing_new_mark_ = false;
@@ -803,7 +813,7 @@ void LLController::externalLandingTick() {
     patrol_cmd.pose.orientation = external_landing_goal_.pose.orientation;
 
     if (!external_landing_alignment_complete_) {
-        ROS_INFO_THROTTLE(
+        if (!high_mode) ROS_INFO_THROTTLE(
             1.0,
             "[ExternalLanding] waiting for fresh H alignment %d/%d",
             external_landing_stable_count_, external_landing_stable_frames_);
@@ -1691,6 +1701,15 @@ void LLController::cmdCallback(const ros::TimerEvent& event) {
         }
     }
 
+    // High H descent carries XY only as a transform anchor. The adapter ignores
+    // XY position/velocity; keep lateral error out of the generic Z lead limit.
+    const bool vertical_landing = external_mission_mode_ && Drone_mode == Land &&
+        external_landing_active_ && !external_landing_cancelled_ &&
+        external_landing_alignment_complete_ && external_landing_alignment_mode_ == "high";
+    if (vertical_landing) {
+        mavros_point_cmd.pose.position.x = uav_pose.pose.position.x;
+        mavros_point_cmd.pose.position.y = uav_pose.pose.position.y;
+    }
     // 计算当前 UAV 位置到目标点的距离
     Eigen::Vector3d current_pos(uav_pose.pose.position.x, uav_pose.pose.position.y, uav_pose.pose.position.z);
     Eigen::Vector3d target_pos(mavros_point_cmd.pose.position.x, mavros_point_cmd.pose.position.y, mavros_point_cmd.pose.position.z);
@@ -1789,7 +1808,12 @@ void LLController::cmdCallback(const ros::TimerEvent& event) {
 
     mavros_point_cmd.header.stamp = ros::Time::now();
     mavros_point_cmd.header.frame_id = "camera_init";
-    mavros_point_cmd_pub.publish(mavros_point_cmd);
+    if (vertical_landing) {
+        mavros_point_cmd.header.frame_id = external_landing_frame_;
+        landing_vertical_cmd_pub_.publish(mavros_point_cmd);
+    } else {
+        mavros_point_cmd_pub.publish(mavros_point_cmd);
+    }
     // std::cout<<"Drone_mode = "<<Drone_mode<<std::endl;
     // std::cout<<"mavros_point_cmd.pose.position.x, mavros_point_cmd.pose.position.y, mavros_point_cmd.pose.position.z = "<<mavros_point_cmd.pose.position.x<<", "<<mavros_point_cmd.pose.position.y<<", "<<mavros_point_cmd.pose.position.z<<std::endl;
     last_mavros_point_cmd = mavros_point_cmd;
@@ -1936,7 +1960,8 @@ void LLController::load_params() {
     drop_pre_descent_config_.min_samples = pre_descent_samples;
     if (!drop_pre_descent_config_.valid()) throw std::invalid_argument("invalid pre-descent configuration");
     drop_pre_descent_window_ = DropPreDescentStabilityWindow(drop_pre_descent_config_);
-    landing_settle_config_.max_horizontal_speed_mps = 0.08;
+    landing_settle_config_.height_tolerance_m = 0.05;
+    landing_settle_config_.max_horizontal_speed_mps = 0.10;
     landing_settle_config_.max_vertical_speed_mps = 0.10;
     landing_settle_config_.stable_duration_sec = 0.15;
     load_stability("external_landing/posctl", &landing_settle_config_);
@@ -2049,6 +2074,11 @@ void LLController::load_params() {
         "external_landing/auto_land_retry_sec", 1.0);
     external_landing_handoff_mode_ = nh_.param<std::string>(
         "external_landing/handoff_mode", "AUTO.LAND");
+    external_landing_alignment_mode_ = nh_.param<std::string>(
+        "external_landing/alignment_mode", "low");
+    if ((external_landing_alignment_mode_ != "low" && external_landing_alignment_mode_ != "high") ||
+        (external_landing_alignment_mode_ == "high" && external_landing_handoff_mode_ != "POSCTL"))
+        throw std::invalid_argument("H alignment_mode must be low/high; high requires POSCTL");
     external_landing_handoff_topic_ = nh_.param<std::string>(
         "external_landing/handoff_status_topic", "/patrol_control/external_landing_handoff");
     external_landing_mode_transition_timeout_sec_ = nh_.param(
@@ -3538,6 +3568,7 @@ void LLController::missionCommandCallback(
             external_landing_wire_command_stamp_ = msg->goal.header.stamp;
             external_landing_new_mark_ = false;
             external_landing_alignment_complete_ = false;
+            landing_high_alignment_window_.reset();
             landing_capture_window_.reset();
             landing_handoff_window_.reset();
             external_landing_auto_land_requested_ = false;
@@ -3614,6 +3645,7 @@ void LLController::motionOdomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
         drop_capture_window_.reset(); drop_release_window_.reset();
         drop_pre_descent_window_.reset();
         landing_capture_window_.reset(); landing_handoff_window_.reset();
+        landing_high_alignment_window_.reset();
         return;
     }
     if (!motion_odom_.header.stamp.isZero() && msg->header.stamp <= motion_odom_.header.stamp) return;
@@ -3630,6 +3662,7 @@ void LLController::motionOdomCallback(const nav_msgs::Odometry::ConstPtr& msg) {
         drop_capture_window_.reset(); drop_release_window_.reset();
         drop_pre_descent_window_.reset();
         landing_capture_window_.reset(); landing_handoff_window_.reset();
+        landing_high_alignment_window_.reset();
     }
 }
 
@@ -3903,6 +3936,26 @@ void LLController::publishCompensatedAlignment() {
     compensated_alignment_pub_.publish(feedback);
 }
 
+bool LLController::highLandingAlignmentReady() {
+    Eigen::Vector3d velocity, angular;
+    const bool valid = freshMotion(&velocity, &angular) &&
+        externalLandingMarkFresh(ros::Time::now()) &&
+        externalLandingControlReady(ros::Time::now());
+    const double xy_error = std::max(std::hypot(
+        uav_pose.pose.position.x-land_mark_point.pose.position.x,
+        uav_pose.pose.position.y-land_mark_point.pose.position.y), std::hypot(
+        motion_odom_.pose.pose.position.x-land_mark_point.pose.position.x,
+        motion_odom_.pose.pose.position.y-land_mark_point.pose.position.y));
+    const bool ready = landing_high_alignment_window_.update(ros::Time::now().toSec(),
+        motion_odom_.header.stamp.toSec(), motion_odom_receipt_.toSec(),
+        external_landing_last_mark_stamp_.toSec(), external_landing_last_mark_receipt_.toSec(),
+        xy_error, valid ? velocity.head<2>().norm() : 0.0, valid);
+    if (!ready) ROS_INFO_THROTTLE(1.0,
+        "[ExternalLanding] high alignment waiting: xy=%.4f speed=%.4f valid=%d; require <=0.06m <0.1m/s for 1s",
+        xy_error, valid ? velocity.head<2>().norm() : 0.0, valid);
+    return ready;
+}
+
 bool LLController::landingMotionSettled(bool handoff, double xy_error) {
     auto& window = handoff ? landing_handoff_window_ : landing_capture_window_;
     Eigen::Vector3d v,w;
@@ -3922,6 +3975,7 @@ bool LLController::landingMotionSettled(bool handoff, double xy_error) {
         motion_odom_.pose.pose.position.y-goal.pose.position.y));
     sample.z_error_m=sample.height_m-(handoff ? land_height : external_landing_capture_height_);
     sample.controlled_descent=handoff;
+    sample.check_vertical_speed=!handoff;
     sample.horizontal_speed_mps=sample.feedback_valid ? v.head<2>().norm() : 0.0;
     sample.vertical_speed_mps=sample.feedback_valid ? v.z() : 0.0;
     sample.alignment_latched=handoff ? external_landing_alignment_complete_ : true;

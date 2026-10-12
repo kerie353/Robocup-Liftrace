@@ -21,7 +21,7 @@ def apply_site_profile(settings, profile):
              'terminal_hover_agl','auto_start_after_arm','initialization_timeout','obstacle_columns_enabled',
              'bag_image_hz','bag_image_topic','record_inflated_cloud','record_map_clouds'}
     if settings['mode'] in H_MODES:
-        allowed.update(('landing_xy', 'landing_handoff_mode', 'landing_handoff_status_topic', 'landing_posctl'))
+        allowed.update(('landing_xy', 'landing_handoff_mode', 'landing_handoff_status_topic', 'landing_posctl', 'landing_alignment_mode'))
     if settings.get('trial_kind') in ('corridor_landing','full_mission'):
         allowed.update(('corridor_waypoints','corridor_geometry'))
     if not isinstance(profile,dict) or set(profile)-allowed:
@@ -95,6 +95,8 @@ def validate_settings(settings):
         raise ValueError('landing_handoff_mode only applies to visual H landing')
     if 'landing_posctl' in settings and settings['mode'] not in H_MODES:
         raise ValueError('landing_posctl only applies to visual H landing')
+    if 'landing_alignment_mode' in settings and settings['mode'] not in H_MODES:
+        raise ValueError('landing_alignment_mode only applies to visual H landing')
     validate_landing_posctl(settings)
     if 'landing_handoff_status_topic' in settings:
         topic = settings['landing_handoff_status_topic']
@@ -274,6 +276,7 @@ def generate(root,out,settings,fc_xyz,rig):
     control['external_landing'].update(frame='camera_init',capture_height=capture if h_landing else low,auto_land_height=handoff_z,detections_topic='/uav_vision/detections_mapped' if h_landing else '/board_trials/h_disabled',handoff_mode=settings.get('landing_handoff_mode', 'AUTO.LAND'),handoff_status_topic=settings.get('landing_handoff_status_topic', '/patrol_control/external_landing_handoff'))
     if posctl_stability is not None:
         control['external_landing']['posctl'] = posctl_stability
+    control['external_landing']['alignment_mode'] = settings.get('landing_alignment_mode', 'low')
     overrides={
         '/fast_planner_node/sdf_map/resolution':.10,'/fast_planner_node/sdf_map/map_size_x':area['map_size'][0],'/fast_planner_node/sdf_map/map_size_y':area['map_size'][1],'/fast_planner_node/sdf_map/map_size_z':area['map_size'][2],
         '/fast_planner_node/sdf_map/visualization_rate':2.,

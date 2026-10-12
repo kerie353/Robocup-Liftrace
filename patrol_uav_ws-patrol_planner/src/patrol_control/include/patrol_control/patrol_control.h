@@ -9,6 +9,7 @@
 #include "patrol_control/near_wall_align.h"
 #include "patrol_control/drop_slot_geometry.h"
 #include "patrol_control/landing_handoff_stability.h"
+#include "patrol_control/drop_pre_descent_stability.h"
 #include <nav_msgs/Odometry.h>
 #include <uav_vision/DropAlignmentFeedback.h>
 
@@ -131,6 +132,8 @@ private:
     LandingHandoffStabilityConfig drop_settle_config_, landing_settle_config_, landing_capture_config_;
     double drop_red_cross_xy_tolerance_m_ = 0.04;
     LandingHandoffStabilityWindow drop_capture_window_, drop_release_window_;
+    DropPreDescentStabilityConfig drop_pre_descent_config_;
+    DropPreDescentStabilityWindow drop_pre_descent_window_;
     LandingHandoffStabilityWindow landing_capture_window_, landing_handoff_window_;
     void motionOdomCallback(const nav_msgs::Odometry::ConstPtr& msg);
     const char* motionFeedbackStatus() const;

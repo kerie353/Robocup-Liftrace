@@ -20,10 +20,10 @@ class TimeoutPolicy(unittest.TestCase):
         for i,h in enumerate(heights):
             t=100+i/10;reason=self.p.update(t,t,h)
         return reason
-    def test_thirty_seconds_and_renewal(self):
-        self.assertEqual(self.p.update(129.999),'')
-        self.p.bind(('m',1),129.999)
-        self.assertEqual(self.p.update(130.),'forced_drop_lock_timeout')
+    def test_twenty_seconds_and_renewal(self):
+        self.assertEqual(self.p.update(119.999),'')
+        self.p.bind(('m',1),119.999)
+        self.assertEqual(self.p.update(120.),'forced_drop_lock_timeout')
     def test_stall_strictly_exceeds_five_after_one_second_warmup(self):
         self.assertEqual(self.feed([.5]*61),'')
         self.assertEqual(self.p.update(106.1,106.1,.5),'forced_drop_height_stall')
@@ -50,7 +50,7 @@ class TimeoutPolicy(unittest.TestCase):
     def test_clock_rollback_latches_until_new_identity(self):
         self.p.update(102.,102.,.5);self.assertEqual(self.p.update(101.),'')
         self.assertEqual(self.p.update(131.),'')
-        self.p.bind(('m',2),131.);self.assertEqual(self.p.update(161.),'forced_drop_lock_timeout')
+        self.p.bind(('m',2),131.);self.assertEqual(self.p.update(151.),'forced_drop_lock_timeout')
     def test_irregular_sampling_interpolates_one_second(self):
         for t in (100.,100.3,100.6,100.9,101.2,101.5):self.p.update(t,t,.5)
         self.assertEqual(self.p.low_since,101.2)
@@ -102,7 +102,7 @@ class TimeoutTransaction(unittest.TestCase):
         Clock.value=t;self.c.header.stamp=Stamp(t);self.a._control_state_stamp=Stamp(t)
         self.a._pose.header.stamp=Stamp(t);self.a._pose.pose.position.z=height
     def force(self):
-        self.advance(130.);return self.a._evaluate(Stamp(130.))
+        self.advance(120.);return self.a._evaluate(Stamp(120.))
     def publish(self):
         ROS.Duration=Stamp
         try:self.a._publish_permission(None)
@@ -126,22 +126,22 @@ class TimeoutTransaction(unittest.TestCase):
         for field in ('revoke','stale','deadline','frame'):
             self.setUp();self.force()
             if field=='revoke':self.c.active=False;self.a._on_alignment_context(self.c)
-            elif field=='stale':self.c.header.stamp=Stamp(120.)
-            elif field=='deadline':self.c.deadline=Stamp(130.)
+            elif field=='stale':self.c.header.stamp=Stamp(110.)
+            elif field=='deadline':self.c.deadline=Stamp(120.)
             else:self.a._pose.header.frame_id='wrong'
-            self.assertIsNone(self.a._forced_source(Stamp(130.)))
+            self.assertIsNone(self.a._forced_source(Stamp(120.)))
     def test_stale_pose_control_used_slot_and_invalid_feedback_block(self):
         for field in ('pose','control','slot','nan','future','future_control'):
-            self.setUp();self.advance(130.)
+            self.setUp();self.advance(120.)
             if field=='pose':self.a._pose.header.stamp=Stamp(100.)
             elif field=='control':self.a._control_state=1
             elif field=='slot':self.a._blocked_slots.add(1)
-            elif field=='future':self.a._pose.header.stamp=Stamp(130.1)
-            elif field=='future_control':self.a._control_state_stamp=Stamp(130.1)
+            elif field=='future':self.a._pose.header.stamp=Stamp(120.1)
+            elif field=='future_control':self.a._control_state_stamp=Stamp(120.1)
             else:self.a._pose.pose.position.z=float('nan')
-            self.assertFalse(self.a._evaluate(Stamp(130.))[0])
+            self.assertFalse(self.a._evaluate(Stamp(120.))[0])
     def test_renewal_preserves_start(self):
-        self.advance(129.);self.a._on_alignment_context(self.c)
+        self.advance(119.);self.a._on_alignment_context(self.c)
         self.assertEqual(self.a._drop_timeout.started,100.);self.assertTrue(self.force()[0])
     def test_raw_once_ack_enters_recovery_without_visual(self):
         self.force();p=self.publish();o=proxy();o._permission=p
@@ -159,16 +159,16 @@ class TimeoutTransaction(unittest.TestCase):
         self.assertEqual(b._transaction.phase,'RECOVERY');self.assertEqual(b._transaction.strict_evidence_stamp_ns,0)
         b._update_recovery.__globals__['MotionOptimization']=MotionOptimization
         b._recovery_height=1.;b._control_state=1;b._align_mode='disabled'
-        b._control_state_receipt_ns=b._align_mode_receipt_ns=130_010_000_000
+        b._control_state_receipt_ns=b._align_mode_receipt_ns=120_010_000_000
         b._odom_rejection_reason=lambda sample,now: ''
-        for t in (130.1,130.4,130.7):
+        for t in (120.1,120.4,120.7):
             Clock.value=t;ns=round(t*1e9)
             b._update_recovery(N(stamp_ns=ns,x=0.,y=0.,z=1.4),ns)
         self.assertEqual(b._transaction.phase,'TERMINAL')
         self.assertFalse(b.errors);self.assertEqual(b.core.committed_slots,1)
         # Core resumes the mission only after the physical ACK and recovery.
         self.assertEqual(b.core.phase.value,'SEARCH')
-        next_action=b.core.choose_confirmed(candidate(target_id=8,class_name='panzer',now=131.),131.,(0.,0.))
+        next_action=b.core.choose_confirmed(candidate(target_id=8,class_name='panzer',now=121.),121.,(0.,0.))
         self.assertIsNotNone(next_action);self.assertEqual(next_action.payload_slot,2)
 
 

@@ -1,7 +1,7 @@
 # 普通许可保持短时有效；严格上下文投递另有以下强制投递超时。
 drop_timeout:
   enabled: true
-  lock_timeout_sec: 30.0
+  lock_timeout_sec: 20.0
   height_rate_threshold: 0.15  # |h(t)-h(t-1s)| / h(t-1s)，h为FC离地高度
   stall_start_height_m: 0.60 # 仅FC离地高度严格低于60cm时计5秒
   stall_timeout_sec: 5.0      # 严格超过5秒；恢复到>=15%后重新计时

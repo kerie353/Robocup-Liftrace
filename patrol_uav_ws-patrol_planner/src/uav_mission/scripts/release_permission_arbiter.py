@@ -43,7 +43,7 @@ class ReleasePermissionArbiter:
         if not math.isfinite(self._drop_ground_z):
             raise ValueError("drop_timeout/ground_z must be finite")
         self._drop_timeout = DropTimeout(
-            float(rospy.get_param("~drop_timeout/lock_timeout_sec", 30.0)),
+            float(rospy.get_param("~drop_timeout/lock_timeout_sec", 20.0)),
             float(rospy.get_param("~drop_timeout/height_rate_threshold", 0.15)),
             float(rospy.get_param("~drop_timeout/stall_timeout_sec", 5.0)),
             float(rospy.get_param("~pose_timeout", 0.5)),

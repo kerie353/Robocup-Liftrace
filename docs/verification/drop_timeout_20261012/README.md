@@ -2,6 +2,8 @@
 
 本次基于 `liftrace_board_trial_20260928` / `bf096143`。正常投递条件和高度配置保持原值，新增外部任务的两种强制投递路径。修改先交用户审核；审核通过后才推送 `origin/liftrace_board_trial_20260928`。没有启动仿真、实机、舵机或部署。
 
+2026-10-12补充：按用户最新要求，第一个锁定超时由30秒调整为20秒；低于60cm/15%/连续超过5秒及其余逻辑保持不变。
+
 ## 1. 当前投递任务如何释放舵机
 
 以下指正式/板端 `external_mission_mode` 且 `compensated_alignment` 开启的当前链。旧独立固定航线仍保留历史行为，不能把其70次/50次计数当成正式链释放条件。
@@ -15,7 +17,7 @@
 7. 执行：控制器最后检查MAVROS新鲜、连接、armed、OFFBOARD与近墙中心边界，将许可epoch/revision、动作编号和身份固定进异步ServoAction。guarded_servo_proxy复核许可与动作互锁，调用/legacy/Servo_raw。服务传输成功不等于投递完成；只有匹配的终态成功ACK才置drop_complete、提交槽位。
 8. 投后恢复：红十字/标准靶按各自恢复设定高度爬升；达到external_recovery_height后控制器进入Run_point并等待任务层接续。Bridge还要求投后新鲜反馈、Run状态、align_mode=disabled及原有恢复稳定/运动交接条件，再报告RECOVERY成功。任务层随后选下一目标；满足投递次数后继续投后路线/H任务。
 
-主要代码：`patrol_control.cpp`的WayPointDetectDone、CrossDetectionDone、compensatedDropSettled、executeDropAction；视觉drop_aligner.py；任务release_permission_arbiter.py、guarded_servo_proxy.py、navigation_planner_bridge.py。当前外部链的旧十字30秒限制被alignmentWindowOpen跳过，既有Manager目标动作默认90秒期限只负责任务失败收尾，原先没有“30秒强制投递”。
+主要代码：`patrol_control.cpp`的WayPointDetectDone、CrossDetectionDone、compensatedDropSettled、executeDropAction；视觉drop_aligner.py；任务release_permission_arbiter.py、guarded_servo_proxy.py、navigation_planner_bridge.py。当前外部链的旧十字30秒限制被alignmentWindowOpen跳过，既有Manager目标动作默认90秒期限只负责任务失败收尾，原先没有锁定超时强制投递。
 
 ## 2. 高度阈值在哪里，如何修改
 
@@ -56,21 +58,21 @@ python3 deployment/board_trials_4x4/common/uav_board_trials/scripts/run_trial.py
 
 两条件是**或**关系，只限于有严格有效AlignmentTargetContext的外部投递。旧无上下文入口、搜索、APPROACH飞往目标、H降落不启用。
 
-- **锁定30秒**：从许可节点首次接收Bridge冻结地图点的有效ALIGN上下文开始计时。到30.0秒还未投递完成，发forced_drop_lock_timeout许可。同一身份重复ALIGN或上下文续租不重置开始时间；新任务、撤销清空。这里“锁定”明确指开始末端ALIGN事务，不是搜索候选首次发现，也不是稍后通过5帧捕获的compensated_goal_frozen。既有Manager更早到期时仍优先终止任务，不延长其deadline。
+- **锁定20秒**：从许可节点首次接收Bridge冻结地图点的有效ALIGN上下文开始计时。到20.0秒还未投递完成，发forced_drop_lock_timeout许可。同一身份重复ALIGN或上下文续租不重置开始时间；新任务、撤销清空。这里“锁定”明确指开始末端ALIGN事务，不是搜索候选首次发现，也不是稍后通过5帧捕获的compensated_goal_frozen。既有Manager更早到期时仍优先终止任务，不延长其deadline。
 - **低于60cm且高度变化率低于15%超过5秒**：按用户确认，`rate(t)=abs(h(t)-h(t-1s))/h(t-1s)`，h为FC AGL，使用位姿话题并减去生成器给出的同坐标地面ground_z。对不整齐采样在线性插值得到1秒前的高度。仅当前FC AGL严格<0.60m时累计；连续rate<0.15且时长严格>5.0秒，发forced_drop_height_stall许可；等于15%重置，等于5秒不触发。升高/降低均看变化量绝对值。
-- **60cm是严格下界入口**：等于或高于0.60m时5秒计时清零；高位水平补偿悬停不触发5秒中断。下降到0.60m以下后，以低变化率首个有效样本开始5秒；回升至0.60m及以上后再次下降，必须重新累计。最近1秒高度历史可包含跨过60cm前的样本，计时本身绝不计入高于等于60cm的时段。首次没有1秒历史时先等采样齐备。30秒计时与60cm无关。
+- **60cm是严格下界入口**：等于或高于0.60m时5秒计时清零；高位水平补偿悬停不触发5秒中断。下降到0.60m以下后，以低变化率首个有效样本开始5秒；回升至0.60m及以上后再次下降，必须重新累计。最近1秒高度历史可包含跨过60cm前的样本，计时本身绝不计入高于等于60cm的时段。首次没有1秒历史时先等采样齐备。20秒计时与60cm无关。
 - 例如FC AGL0.50m时最近1秒变化0.05m，rate=10%，连续超过5秒会中断；变化0.075m恰好15%，不累计。
 - 重复/乱序帧不累计；无效、过期、未来或低于等于5cm的高度、断流/间隙超过pose_timeout会清空5秒窗口，不把缺帧当作高度不动。ROS时钟回退锁住该事务的计时输出，直到新身份；ROS时间暂停不累计。
 - 超时许可在正常视觉/捕获/水平到位/高度窗之前生效；控制器在当前XYZ保持位置、停止独立下降轨迹，以事务slot调用原异步ServoAction一次。超时已触发的原因保持到该事务撤销，避免两条超时互相重发。
 - **仍保留**新鲜任务身份/上下文/位姿/odom、Aligning状态、armed/OFFBOARD、近墙中心边界、代理动作与槽位防重。撤销、任务期限到、手动接管、掉线、失效反馈不会被超时绕过。
-- 收到匹配成功ACK后按现有恢复高度接续Bridge/Mission Core，下一投递使用下一槽位。调用已开始但未得到ACK、明确失败或结果未知时不会再调用，也不会伪报成功；由原任务deadline及隔离/返航逻辑收尾。30秒是请求时机，不是舵机硬件完成的保证；30秒前已发出的调用不会因超时再次执行。
+- 收到匹配成功ACK后按现有恢复高度接续Bridge/Mission Core，下一投递使用下一槽位。调用已开始但未得到ACK、明确失败或结果未知时不会再调用，也不会伪报成功；由原任务deadline及隔离/返航逻辑收尾。20秒是请求时机，不是舵机硬件完成的保证；20秒前已发出的调用不会因超时再次执行。
 
 参数在`patrol_uav_ws-patrol_planner/src/uav_mission/config/release_guard.yaml`：
 
 ```yaml
 drop_timeout:
   enabled: true
-  lock_timeout_sec: 30.0
+  lock_timeout_sec: 20.0
   height_rate_threshold: 0.15
   stall_start_height_m: 0.60
   stall_timeout_sec: 5.0
@@ -87,4 +89,4 @@ drop_timeout:
 
 修改前控制包归档在工作区外`/home/ray/TOUDI/.drop_timeout_work_20261012/patrol_control_before.tar`，基准仍可由bf096143审计。无H/起飞/路线/当前释放高度运行逻辑改动。异步测试夹具补齐当前既有H模式4字段与禁用通道替身，用于运行原24项异步回归；没有改H业务代码。
 
-用户审核重点：低于60cm的严格门槛与连续5秒是否符合预期、是否接受30秒超时在当前位置及非正常高度投递、无ACK继续沿原故障隔离而不虚报下一任务。用户审核前只保留本地提交，不推送。审核通过后推送远端同名分支；完整ROS构建及飞行效果属于明确尚未完成的验证范围。
+用户审核重点：低于60cm的严格门槛与连续5秒是否符合预期、是否接受20秒超时在当前位置及非正常高度投递、无ACK继续沿原故障隔离而不虚报下一任务。用户审核前只保留本地提交，不推送。审核通过后推送远端同名分支；完整ROS构建及飞行效果属于明确尚未完成的验证范围。

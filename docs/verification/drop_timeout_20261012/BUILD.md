@@ -37,3 +37,7 @@ python3 -m unittest discover -s patrol_uav_ws-patrol_planner/src/patrol_control/
 因此**patrol_control整节点Catkin构建、原完整补偿几何C++回归和ROS消息集成尚未验证**。提取C++函数的UBSan编译运行不能替代这些检查。之前WSL构建报告属于历史机器/版本。
 
 没有启动SITL/实机、舵机、ROS master、部署或推送远端。本地候选交用户审核，部署前需要在完整ROS环境补构建和集成验证。
+
+## 2026-10-12补充：第一个中断条件调整为20秒
+
+按用户最新要求，锁定超时的策略默认、许可节点缺省参数和release_guard.yaml统一由30秒改为20秒；其余条件未改变。20秒边界/续租、高度门控、许可/代理/Bridge/Core下一目标及配置生成20项，原执行事务61项，共81项相关离线回归通过；YAML逐字段检查仅lock_timeout_sec变化，AST与差异检查通过。C++运行源码未变，本次没有重跑旧C++编译或启动ROS/飞行。日志在`/home/ray/TOUDI/.drop_timeout_work_20261012/update20/`。本次不推送、不创建PR。

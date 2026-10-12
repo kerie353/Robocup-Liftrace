@@ -4,7 +4,7 @@ import math
 
 
 class DropTimeout:
-    def __init__(self, lock_timeout=30., rate_threshold=.15, stall_timeout=5., sample_gap=.5,
+    def __init__(self, lock_timeout=20., rate_threshold=.15, stall_timeout=5., sample_gap=.5,
                  stall_start_height=.60):
         values = (lock_timeout, rate_threshold, stall_timeout, sample_gap, stall_start_height)
         if not all(math.isfinite(v) and v > 0 for v in values) or rate_threshold > 1:

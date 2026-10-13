@@ -35,13 +35,23 @@ def landing_descent_parameters(settings):
     return dict(mode=mode, speed_mps=float(speed), max_step_dt_sec=0.20)
 
 
+def landing_alignment_mode(settings):
+    mode = settings.get('landing_alignment_mode', 'non_vh')
+    # Normalize old saved settings without advertising obsolete names in CLI.
+    if mode == 'low':
+        mode = 'non_vh'
+    elif mode == 'high':
+        mode = 'vh'
+    if mode not in ('non_vh', 'vh'):
+        raise ValueError('landing_alignment_mode must be non_vh or vh')
+    return mode
+
+
 def validate_landing_posctl(settings):
     landing_descent_parameters(settings)
-    mode = settings.get('landing_alignment_mode', 'low')
-    if mode not in ('low', 'high'):
-        raise ValueError('landing_alignment_mode must be low or high')
-    if mode == 'high' and settings.get('landing_handoff_mode', 'AUTO.LAND') not in ('POSCTL', 'OFFBOARD'):
-        raise ValueError('high H alignment requires POSCTL or OFFBOARD')
+    mode = landing_alignment_mode(settings)
+    if mode == 'vh' and settings.get('landing_handoff_mode', 'AUTO.LAND') not in ('POSCTL', 'OFFBOARD'):
+        raise ValueError('vh H alignment requires POSCTL or OFFBOARD')
     supplied = settings.get('landing_posctl', {})
     if not isinstance(supplied, dict) or set(supplied) - set(DEFAULTS):
         raise ValueError('invalid landing_posctl fields')

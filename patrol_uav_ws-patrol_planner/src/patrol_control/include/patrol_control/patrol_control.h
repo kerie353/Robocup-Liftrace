@@ -329,7 +329,7 @@ private:
     bool external_planner_height_hold_active_ = false;
     geometry_msgs::PoseStamped external_planner_height_hold_;
     std::string external_landing_frame_ = "camera_init";
-    std::string external_landing_alignment_mode_ = "low";
+    std::string external_landing_alignment_mode_ = "non_vh";
     LandingHighAlignmentWindow landing_high_alignment_window_;
     ros::Publisher landing_vertical_cmd_pub_;
     // Reuse only the mathematical ramp; H has its own config and transaction.

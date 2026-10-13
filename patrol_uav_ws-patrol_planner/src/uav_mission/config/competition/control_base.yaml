@@ -24,7 +24,7 @@ external_landing:
     mode: 1
     speed_mps: 0.20
     max_step_dt_sec: 0.20
-  alignment_mode: low  # high requires POSCTL and the navigation frame adapter
+  alignment_mode: non_vh  # vh requires POSCTL and the navigation frame adapter
   frame: camera_init
   detections_topic: /uav_vision/detections_mapped
   capture_height: 1.6

@@ -13,7 +13,7 @@ from uav_mission.execution_speed import FollowingSpeed
 from uav_mission.corridor_speed import CorridorSpeedConfig
 from uav_mission.navigation_following_config import navigation_following_profile, navigation_corridor_schedule
 from uav_mission.motion_optimization import MotionOptimization, optimize_post_route
-from uav_mission.landing_posctl_config import validate_landing_posctl, landing_control_parameters, landing_descent_parameters
+from uav_mission.landing_posctl_config import validate_landing_posctl, landing_control_parameters, landing_descent_parameters, landing_alignment_mode
 from uav_mission.landing_offboard_config import landing_offboard_parameters
 from uav_mission.navigation_recovery_config import recovery_parameters
 from uav_mission.drop_height_config import release_heights
@@ -214,7 +214,7 @@ def generate(root,out,settings,fc_xyz,rig):
     control['external_landing'].update(frame=rig['mission_frame'],capture_height=capture,auto_land_height=handoff_z,detections_topic='/uav_vision/detections_mapped',handoff_mode=settings.get('landing_handoff_mode','AUTO.LAND'))
     if posctl_stability is not None:
         control['external_landing']['posctl'] = posctl_stability
-    control['external_landing']['alignment_mode'] = settings.get('landing_alignment_mode', 'low')
+    control['external_landing']['alignment_mode'] = landing_alignment_mode(settings)
     control['external_landing']['descent'] = landing_descent_parameters(settings)
     control['external_landing'].update(landing_offboard_parameters(settings, ground, float(rig['fc_ground_clearance'])))
     overrides={

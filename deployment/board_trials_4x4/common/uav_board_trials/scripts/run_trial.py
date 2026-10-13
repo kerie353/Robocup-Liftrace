@@ -11,7 +11,7 @@ from mapping_startup import PoseAgreement,MapWarmup,VisionReadiness,startup_tran
 def main():
     p=argparse.ArgumentParser();p.add_argument('trial',choices=sorted(TRIAL_FOLDERS));p.add_argument('mode',choices=['preview','flight']);p.add_argument('--root',type=Path,required=True);p.add_argument('--model',type=Path);p.add_argument('--metadata',type=Path);p.add_argument('--check-config',action='store_true');p.add_argument('--site-config',type=Path);p.add_argument('--real-release',action='store_true');p.add_argument('--mapping-startup-config',type=Path);p.add_argument('--capture-speed',type=float,choices=(.5,1.,1.2));p.add_argument('--capture-lighting',choices=('normal','dim','unspecified'));p.add_argument('--motion-optimized',action='store_true');p.add_argument('--survey-pattern',choices=('rectangle','snake2','snake3'))
     p.add_argument('--resume-survey',choices=('on','off'),help='Override interrupted survey resume for priority/full mission; omit to inherit settings')
-    p.add_argument('--landing-alignment-mode',choices=('low','high'),help='H landing only: low keeps ten-frame capture; high aligns for 1s; descent policy is selected separately')
+    p.add_argument('--landing-alignment-mode',choices=('non_vh','vh'),help='H landing only: non_vh keeps ten-frame capture; vh aligns for 1s; descent policy is selected separately')
     p.add_argument('--speed-profile',choices=('limited','competition'),help='08 only: same measured field, explicit planning/following speeds')
     p.add_argument('--generate-config',type=Path,help='With --check-config: write configuration only, never start ROS')
     p.add_argument('--reference-fc',type=float,nargs=3,metavar=('X','Y','Z'),help='Stationary reference for offline generation')

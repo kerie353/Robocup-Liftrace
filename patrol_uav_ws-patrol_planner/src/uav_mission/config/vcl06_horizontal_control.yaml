@@ -22,7 +22,7 @@ external_landing:
     mode: 1
     speed_mps: 0.20
     max_step_dt_sec: 0.20
-  alignment_mode: low  # high requires POSCTL and the navigation frame adapter
+  alignment_mode: non_vh  # vh requires POSCTL and the navigation frame adapter
   frame: camera_init
   # 正式链直接消费视觉 typed map detection；旧 PoseStamped 仅留 legacy 模式。
   detections_topic: /uav_vision/detections_mapped

@@ -62,7 +62,7 @@ class OffboardHelperContractTests(unittest.TestCase):
                                 dict(x=8.3, y=4., agl=.9), dict(x=8.3, y=-4., agl=.9)],
             landing_xy=[8.5, -4.2])
         settings = apply_landing_override(settings, dict(landing_descent_mode=4,
-            landing_handoff_mode='OFFBOARD', landing_alignment_mode='high'))
+            landing_handoff_mode='OFFBOARD', landing_alignment_mode='vh'))
         rig = yaml.safe_load((PKG / 'config/competition/known_rig.yaml').read_text())
         with tempfile.TemporaryDirectory() as out:
             ref = formal_generate(ROOT, out, settings, (0., 0., .09), rig)
@@ -108,10 +108,10 @@ class OffboardConfigTests(unittest.TestCase):
         for formal, names in ((False, TRIAL_FILES), (True, FORMAL_FILES)):
             for name in names:
                 base = self.settings(name, formal)
-                self.assertEqual(base.get('landing_descent_mode', 1), 1)
+                self.assertEqual(base.get('landing_descent_mode', 1), 2 if name == '08_full_mission' else 1)
                 self.assertEqual(base['landing_handoff_mode'], 'POSCTL')
                 before = copy.deepcopy(base)
-                for alignment in ('low', 'high'):
+                for alignment in ('non_vh', 'vh'):
                     configured = apply_landing_override(base, dict(self.patch, landing_alignment_mode=alignment))
                     function = formal_generate if formal else trial_generate
                     for z in (0., .09):
@@ -213,7 +213,7 @@ class OffboardConfigTests(unittest.TestCase):
             # The explicit switches also accept 4/high without a whole candidate file.
             command = [sys.executable, str(script), 'landing', 'preview', '--root', str(ROOT),
                        '--landing-descent-mode', '4', '--landing-handoff-mode', 'OFFBOARD',
-                       '--landing-alignment-mode', 'high', '--check-config']
+                       '--landing-alignment-mode', 'vh', '--check-config']
             result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             for option in ('--landing-descent-mode', '--landing-handoff-mode'):

@@ -1,7 +1,7 @@
 """Generate all local-Z parameters from one stationary FC reference."""
 from pathlib import Path
 import math,copy,json,yaml,struct
-from uav_mission.landing_posctl_config import validate_landing_posctl, landing_control_parameters, landing_descent_parameters
+from uav_mission.landing_posctl_config import validate_landing_posctl, landing_control_parameters, landing_descent_parameters, landing_alignment_mode
 from uav_mission.landing_offboard_config import landing_offboard_parameters
 from uav_mission.drop_height_config import release_heights
 
@@ -279,7 +279,7 @@ def generate(root,out,settings,fc_xyz,rig):
     control['external_landing'].update(frame='camera_init',capture_height=capture if h_landing else low,auto_land_height=handoff_z,detections_topic='/uav_vision/detections_mapped' if h_landing else '/board_trials/h_disabled',handoff_mode=settings.get('landing_handoff_mode', 'AUTO.LAND'),handoff_status_topic=settings.get('landing_handoff_status_topic', '/patrol_control/external_landing_handoff'))
     if posctl_stability is not None:
         control['external_landing']['posctl'] = posctl_stability
-    control['external_landing']['alignment_mode'] = settings.get('landing_alignment_mode', 'low')
+    control['external_landing']['alignment_mode'] = landing_alignment_mode(settings)
     control['external_landing']['descent'] = landing_descent_parameters(settings)
     control['external_landing'].update(landing_offboard_parameters(settings, ground, float(rig['fc_ground_clearance'])))
     overrides={

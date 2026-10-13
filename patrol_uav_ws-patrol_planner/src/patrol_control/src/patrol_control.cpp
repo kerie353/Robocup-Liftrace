@@ -918,7 +918,7 @@ void LLController::externalLandingTick() {
         landing_high_alignment_window_.reset();
     }
 
-    const bool high_mode = external_landing_alignment_mode_ == "high";
+    const bool high_mode = external_landing_alignment_mode_ == "vh";
     const bool high_ready = high_mode && !external_landing_alignment_complete_ &&
         highLandingAlignmentReady();
     // Low acquisition retains ten fresh aligned frames. High acquisition uses
@@ -2352,7 +2352,9 @@ void LLController::load_params() {
     external_landing_handoff_mode_ = nh_.param<std::string>(
         "external_landing/handoff_mode", "AUTO.LAND");
     external_landing_alignment_mode_ = nh_.param<std::string>(
-        "external_landing/alignment_mode", "low");
+        "external_landing/alignment_mode", "non_vh");
+    if (external_landing_alignment_mode_ == "low") external_landing_alignment_mode_ = "non_vh";
+    else if (external_landing_alignment_mode_ == "high") external_landing_alignment_mode_ = "vh";
     landing_descent_config_.mode = nh_.param("external_landing/descent/mode", 1);
     landing_descent_config_.speed_mps = nh_.param("external_landing/descent/speed_mps", 0.20);
     landing_descent_config_.max_step_dt_sec = nh_.param("external_landing/descent/max_step_dt_sec", 0.20);
@@ -2380,10 +2382,10 @@ void LLController::load_params() {
     auto landing_ramp_config = landing_descent_config_;
     if (landing_ramp_config.mode != 4)
         landing_descent_profile_ = DropDescentProfile(landing_ramp_config); // Existing modes 1/2/3 only.
-    if ((external_landing_alignment_mode_ != "low" && external_landing_alignment_mode_ != "high") ||
-        (external_landing_alignment_mode_ == "high" && external_landing_handoff_mode_ != "POSCTL" &&
+    if ((external_landing_alignment_mode_ != "non_vh" && external_landing_alignment_mode_ != "vh") ||
+        (external_landing_alignment_mode_ == "vh" && external_landing_handoff_mode_ != "POSCTL" &&
          external_landing_handoff_mode_ != "OFFBOARD"))
-        throw std::invalid_argument("H alignment_mode must be low/high; high requires POSCTL or direct OFFBOARD");
+        throw std::invalid_argument("H alignment_mode must be non_vh/vh; vh requires POSCTL or direct OFFBOARD");
     external_landing_handoff_topic_ = nh_.param<std::string>(
         "external_landing/handoff_status_topic", "/patrol_control/external_landing_handoff");
     external_landing_mode_transition_timeout_sec_ = nh_.param(

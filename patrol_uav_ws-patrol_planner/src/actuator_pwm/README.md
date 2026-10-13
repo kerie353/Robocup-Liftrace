@@ -4,7 +4,7 @@
 
 | req | 舱位 | 40-pin物理针脚 | GPIO | PWM | 地址 | 初始/释放脉宽ms |
 |---|---|---|---|---|---|---|
-| 1 | 后仓 | 16 | GPIO3_B5 | PWM12_M0 | febf0000.pwm | 1.7 / 2.1 |
+| 1 | 后仓 | 16 | GPIO3_B5 | PWM12_M0 | febf0000.pwm | 1.7 / 2.2 |
 | 2 | 右仓 | 7 | GPIO1_D6 | PWM14_M2 | febf0020.pwm | 1.0 / 2.1 |
 | 3 | 左仓 | 18 | GPIO3_B6 | PWM13_M0 | febf0010.pwm | 1.1 / 2.1 |
 
@@ -29,3 +29,5 @@ roslaunch actuator_pwm launch_all.launch
 服务成功只表示PWM操作确认，不证明机械投放成功。
 本次只改源码、离线检查和编译，不运行节点、不写PWM、不调用服务。
 旧包已保存于 ~/board_deploy_backups/20261011_actuator_before_5plus/。
+
+2026-10-14：按用户现场反馈与指定值，1号归位保持1.7ms，释放改2.2ms；2/3号及1秒输出时间保持。尚未编译或执行新脉宽动作。

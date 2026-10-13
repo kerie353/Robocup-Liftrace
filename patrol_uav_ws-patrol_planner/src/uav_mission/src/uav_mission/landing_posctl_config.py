@@ -29,9 +29,10 @@ def landing_descent_parameters(settings):
     if type(mode) is not int or mode not in (1, 2, 3, 4):
         raise ValueError('landing_descent_mode must be 1, 2, 3 or 4')
     validate_landing_offboard(settings)
+    max_speed = 3.0 if mode == 2 else 1.0
     if (isinstance(speed, bool) or not isinstance(speed, (int, float)) or
-            not math.isfinite(speed) or not 0.0 < speed <= 1.0):
-        raise ValueError('landing_descent_speed_mps must be in (0, 1]')
+            not math.isfinite(speed) or not 0.0 < speed <= max_speed):
+        raise ValueError('landing_descent_speed_mps must be in (0, %g] for mode %d' % (max_speed, mode))
     return dict(mode=mode, speed_mps=float(speed), max_step_dt_sec=0.20)
 
 

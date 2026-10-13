@@ -138,6 +138,7 @@ private:
     DropDescentConfig drop_descent_config_;
     DropDescentProfile drop_descent_profile_;
     ros::Publisher drop_vertical_cmd_pub_;
+    ros::Publisher drop_velocity_cmd_pub_;
     bool dropDescentControlActive() const;
     bool compensated_target_outside_boundary_ = false;
     geometry_msgs::PoseStamped compensated_fc_goal_;

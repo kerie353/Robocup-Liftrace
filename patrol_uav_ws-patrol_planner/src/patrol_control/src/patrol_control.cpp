@@ -226,6 +226,9 @@ void LLController::initializeNode() {
     drop_vertical_cmd_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(
         nh_.param<std::string>("drop_system/descent/zero_velocity_setpoint_topic",
             "/navigation/drop_setpoint_vertical"), 1);
+    drop_velocity_cmd_pub_ = nh_.advertise<mavros_msgs::PositionTarget>(
+        nh_.param<std::string>("drop_system/descent/velocity_setpoint_topic",
+            "/navigation/drop_setpoint_velocity"), 1);
     if (!external_mission_mode_) {
         detect_sub_ = nh_.subscribe(
             "/detect/waypoint_mark_point", 1,
@@ -1876,6 +1879,8 @@ void LLController::cmdCallback(const ros::TimerEvent& event) {
         external_mission_mode_ && Drone_mode == Aligning && drop_descent_started_ && !drop_complete;
     bool independent_drop = pending_independent_drop && dropDescentControlActive();
     bool zero_velocity_drop = independent_drop && drop_descent_config_.mode == 3;
+    bool vertical_speed_drop = false;
+    double drop_vz_command = 0.0;
     if (pending_independent_drop && !independent_drop) {
         drop_descent_profile_.pause(ros::Time::now().toSec());
         mavros_point_cmd = uav_pose; // Revoked transaction restores the existing position hold lane.
@@ -1891,9 +1896,18 @@ void LLController::cmdCallback(const ros::TimerEvent& event) {
     if (independent_drop) {
         Eigen::Vector3d velocity, angular;
         const double now = ros::Time::now().toSec();
-        if (freshMotion(&velocity, &angular) && externalLandingControlReady(ros::Time::now()))
-            mavros_point_cmd.pose.position.z = drop_descent_profile_.update(now);
-        else {
+        if (freshMotion(&velocity, &angular) && externalLandingControlReady(ros::Time::now())) {
+            if (drop_descent_config_.mode == 4) {
+                drop_vz_command = drop_descent_profile_.updateVelocity(
+                    now, motion_odom_.pose.pose.position.z, velocity.z());
+                vertical_speed_drop = !drop_descent_profile_.holding();
+                mavros_point_cmd.pose.position.z = drop_descent_profile_.height();
+                ROS_INFO_THROTTLE(1.0,
+                    "[DropDescent4] z=%.3f target=%.3f measured_vz=%.3f command_vz=%.3f hold=%d",
+                    motion_odom_.pose.pose.position.z, drop_release_setpoint_height_,
+                    velocity.z(), drop_vz_command, drop_descent_profile_.holding());
+            } else mavros_point_cmd.pose.position.z = drop_descent_profile_.update(now);
+        } else {
             drop_descent_profile_.pause(now);
             mavros_point_cmd.pose.position.z = drop_descent_profile_.height();
         }
@@ -2039,6 +2053,18 @@ void LLController::cmdCallback(const ros::TimerEvent& event) {
         landing_vertical_cmd_pub_.publish(mavros_point_cmd);
     } else if (zero_velocity_drop) {
         drop_vertical_cmd_pub_.publish(mavros_point_cmd);
+    } else if (vertical_speed_drop) {
+        mavros_msgs::PositionTarget raw;
+        raw.header = mavros_point_cmd.header;
+        raw.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
+        raw.type_mask = mavros_msgs::PositionTarget::IGNORE_PZ |
+            mavros_msgs::PositionTarget::IGNORE_VX | mavros_msgs::PositionTarget::IGNORE_VY |
+            mavros_msgs::PositionTarget::IGNORE_AFX | mavros_msgs::PositionTarget::IGNORE_AFY |
+            mavros_msgs::PositionTarget::IGNORE_AFZ | mavros_msgs::PositionTarget::IGNORE_YAW_RATE;
+        raw.position = mavros_point_cmd.pose.position;
+        raw.velocity.z = drop_vz_command;
+        raw.yaw = tf::getYaw(mavros_point_cmd.pose.orientation);
+        drop_velocity_cmd_pub_.publish(raw);
     } else {
         mavros_point_cmd_pub.publish(mavros_point_cmd);
     }
@@ -2177,6 +2203,10 @@ void LLController::load_params() {
     drop_descent_config_.mode = nh_.param("drop_system/descent/mode", 1);
     drop_descent_config_.speed_mps = nh_.param("drop_system/descent/speed_mps", 0.20);
     drop_descent_config_.max_step_dt_sec = nh_.param("drop_system/descent/max_step_dt_sec", 0.20);
+    drop_descent_config_.velocity_speed_mps = nh_.param("drop_system/descent/velocity_speed_mps", 0.60);
+    drop_descent_config_.acceleration_mps2 = nh_.param("drop_system/descent/acceleration_mps2", 0.60);
+    drop_descent_config_.braking_mps2 = nh_.param("drop_system/descent/braking_mps2", 0.60);
+    drop_descent_config_.hold_tolerance_m = nh_.param("drop_system/descent/hold_tolerance_m", 0.015);
     if (!drop_descent_config_.valid()) throw std::invalid_argument("invalid drop descent configuration");
     drop_descent_profile_ = DropDescentProfile(drop_descent_config_);
     drop_red_cross_xy_tolerance_m_ = nh_.param(
@@ -4224,7 +4254,8 @@ double LLController::compensatedDropCommandHeight() {
         drop_descent_started_at_ = drop_timeout_last_check_ = ros::Time::now();
         drop_timeout_clock_invalid_ = false;
         ROS_INFO("[DropGeometry] descent_mode=%d z_speed=%.3f z_initial=%.4f",
-            drop_descent_config_.mode,drop_descent_config_.speed_mps,
+            drop_descent_config_.mode,drop_descent_config_.mode == 4
+                ? drop_descent_config_.velocity_speed_mps : drop_descent_config_.speed_mps,
             drop_descent_config_.mode == 1 ? uav_pose.pose.position.z : drop_descent_profile_.height());
         ROS_INFO("[DropGeometry] descent_started slot=%u decision=%u xy_tolerance=%.3f class=%s "
                  "capture_z=%.4f release_z=%.4f serial=%s",

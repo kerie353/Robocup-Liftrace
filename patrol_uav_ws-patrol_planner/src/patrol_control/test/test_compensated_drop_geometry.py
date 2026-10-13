@@ -150,9 +150,12 @@ public:
  struct { uav_vision::DropAlignmentFeedback last; void publish(const uav_vision::DropAlignmentFeedback& m){last=m;} } compensated_alignment_pub_;
  geometry_msgs::PoseStamped patrol_cmd;
  geometry_msgs::PoseStamped mavros_point_cmd;
+ double last_drop_vz=0.0; bool last_drop_velocity_lane=false;
  int composeDropDescentCommand(){
   mavros_point_cmd=compensated_fc_goal_;mavros_point_cmd.pose.position.z=drop_release_setpoint_height_;
   DROP_DESCENT_COMMANDS
+  last_drop_vz=drop_vz_command;last_drop_velocity_lane=vertical_speed_drop;
+  if(independent_drop&&drop_descent_config_.mode==4)return vertical_speed_drop?4:2;
   return independent_drop?(zero_velocity_drop?3:2):1;
  }
  geometry_msgs::PoseStamped uav_pose,compensated_fc_goal_,waypoint_mark_point,waypoint_temp;
@@ -578,7 +581,46 @@ int main(int argc,char**argv){
    profile.pause(101.1);close(profile.update(101.2),1.36);
    for(int i=1;i<=60;++i)profile.update(101.2+i*.1);
    close(profile.height(),.4);profile.reset();assert(!profile.active());
-   config.mode=4;assert(!config.valid());config.mode=3;config.speed_mps=0;assert(!config.valid());
+   config.mode=5;assert(!config.valid());config.mode=3;config.speed_mps=0;assert(!config.valid());
+  }else if(name=="velocity_descent_profile"){
+   DropDescentConfig config;config.mode=4;DropDescentProfile profile(config);
+   assert(config.valid()&&profile.start(1.4,.4,100));
+   double z=1.4,vz=0,peak=0;bool braking=false;
+   for(int i=1;i<=150&&!profile.holding();++i){
+    const double previous=-vz;vz=profile.updateVelocity(100+i*.05,z,vz);
+    const double speed=-vz;assert(speed>=0&&speed<=.6+1e-9);
+    assert(speed<=previous+.6*.05+1e-9);
+    peak=std::max(peak,speed);if(previous>.1&&speed<previous-1e-6)braking=true;
+    z+=vz*.05;
+   }
+   assert(profile.holding()&&braking);close(peak,.6);close(profile.height(),.4);
+   close(profile.updateVelocity(110,.6,-.1),0);close(profile.height(),.4);
+   profile.reset();assert(!profile.active()&&!profile.holding());
+  }else if(name=="velocity_descent_pause"){
+   DropDescentConfig config;config.mode=4;DropDescentProfile profile(config);
+   assert(profile.start(1.4,.4,100));close(profile.updateVelocity(100.1,1.4,0),-.06);
+   close(profile.updateVelocity(100.5,1.4,-.06),0);
+   close(profile.updateVelocity(100.6,1.4,0),-.06);
+   profile.pause(100.7);close(profile.updateVelocity(100.8,1.4,0),-.06);
+   close(profile.updateVelocity(100.9,NAN,0),0);
+   close(profile.updateVelocity(101,1.4,0),-.06);
+   close(profile.updateVelocity(101.1,.39,-.3),0);assert(profile.holding());
+   config.velocity_speed_mps=NAN;assert(!config.valid());config.velocity_speed_mps=.6;
+   config.braking_mps2=0;assert(!config.valid());
+  }else if(name=="velocity_descent_command"){
+   ros::clock_sec=100;LLController d;d.nh_.values["drop_system/descent/mode"]=4;
+   d.loadDropSequenceConfig();capture(d);settle_before_descent(d,101);
+   const auto g=d.compensated_fc_goal_.pose.position;
+   odom(d,101.1,g.x+.2,g.y-.2,1);assert(d.composeDropDescentCommand()==4);
+   close(d.last_drop_vz,-.06);close(d.mavros_point_cmd.pose.position.x,g.x);
+   close(d.mavros_point_cmd.pose.position.y,g.y);close(d.mavros_point_cmd.pose.position.z,1);
+   odom(d,101.2,g.x+.2,g.y,.44,-.1);assert(d.composeDropDescentCommand()==4);
+   assert(d.compensatedDropSettled(true)); // release before terminal hold; no speed dwell
+   odom(d,101.3,g.x,g.y,.414,-.1);assert(d.composeDropDescentCommand()==2);
+   close(d.mavros_point_cmd.pose.position.z,.4);assert(!d.last_drop_velocity_lane);
+   odom(d,101.4,g.x,g.y,.46);assert(d.composeDropDescentCommand()==2); // terminal latch
+   d.servo_alignment_context_.active=false;assert(d.composeDropDescentCommand()==1);
+   d.resetDropState();assert(!d.drop_descent_profile_.active());
   }else if(name=="height_only_rpc"){
    for(const std::string cls:{"pillbox","red_cross"}){
     ros::clock_sec=100;LLController d;auto transport=std::make_shared<Transport>();
@@ -1171,6 +1213,9 @@ class CompensatedDropGeometryTests(unittest.TestCase):
     def test_release_standard_ten_cm_cross_six_cm_are_strict(self): self.run_case('serial_release_exact_limits')
     def test_three_descent_modes_keep_entry_gate_and_reset_transaction(self): self.run_case('serial_descent_modes')
     def test_independent_descent_rate_pause_floor_and_invalid_config(self): self.run_case('serial_descent_profile')
+    def test_mode_four_acceleration_braking_and_latched_terminal_hold(self): self.run_case('velocity_descent_profile')
+    def test_mode_four_missed_feedback_pause_restart_and_invalid_config(self): self.run_case('velocity_descent_pause')
+    def test_mode_four_frozen_xy_release_while_descending_and_position_hold(self): self.run_case('velocity_descent_command')
     def test_height_only_circle_and_cross_release_after_xy_rebound(self): self.run_case('height_only_rpc')
     def test_height_only_retains_height_freshness_context_control_and_permission_guards(self): self.run_case('height_only_guards')
     def test_height_only_does_not_bypass_independent_pre_descent_xy(self): self.run_case('height_only_pre_descent')

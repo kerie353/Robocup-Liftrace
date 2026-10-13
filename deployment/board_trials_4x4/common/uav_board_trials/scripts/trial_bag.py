@@ -18,6 +18,7 @@ def topics_for(settings):
         settings.get('landing_offboard', {}).get('setpoint_topic', '/navigation/landing_setpoint_touchdown'),
         "/mavros/setpoint_raw/local",
         "/navigation/drop_setpoint_vertical",
+        "/navigation/drop_setpoint_velocity",
         "/fastplanner/goal","/planning/goal_status","/planning/bspline","/planning/pos_cmd",
         "/planning/replan","/planning/new","/planning_vis/trajectory",
         "/planning/progress",

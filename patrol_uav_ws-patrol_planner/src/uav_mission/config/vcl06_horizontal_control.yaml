@@ -76,10 +76,15 @@ drop_system:
     enabled: true
     after_sec: 20.0
   descent:
-    mode: 1  # 1=原三轴位置；2=冻结XY+独立Z；3=水平零速度+独立Z
+    mode: 1  # 1=原XYZ；2=冻结XY+Z轨迹；3=零水平速度；4=冻结XY+VZ加速制动
     speed_mps: 0.20  # 仅模式2/3使用，Z指令下降速度
     max_step_dt_sec: 0.20
     zero_velocity_setpoint_topic: /navigation/drop_setpoint_vertical
+    velocity_setpoint_topic: /navigation/drop_setpoint_velocity
+    velocity_speed_mps: 0.60  # 模式4最高向下速度
+    acceleration_mps2: 0.60
+    braking_mps2: 0.60
+    hold_tolerance_m: 0.015
   release_height_only: true  # 下降后释放几何仅检查高度；保留任务、反馈及执行许可
   compensate_before_descent: true
   pre_descent:

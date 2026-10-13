@@ -4358,10 +4358,12 @@ bool LLController::highLandingAlignmentReady() {
     const bool ready = landing_high_alignment_window_.update(ros::Time::now().toSec(),
         motion_odom_.header.stamp.toSec(), motion_odom_receipt_.toSec(),
         external_landing_last_mark_stamp_.toSec(), external_landing_last_mark_receipt_.toSec(),
-        xy_error, valid ? velocity.head<2>().norm() : 0.0, valid);
+        xy_error, valid ? velocity.head<2>().norm() : 0.0, valid,
+        external_landing_mark_max_age_sec_);
     if (!ready) ROS_INFO_THROTTLE(1.0,
-        "[ExternalLanding] high alignment waiting: xy=%.4f speed=%.4f valid=%d; require <=0.06m <0.1m/s for 1s",
-        xy_error, valid ? velocity.head<2>().norm() : 0.0, valid);
+        "[ExternalLanding] high alignment waiting: xy=%.4f speed=%.4f valid=%d; require <=0.06m <0.1m/s for 1s; H_max_age=%.3fs",
+        xy_error, valid ? velocity.head<2>().norm() : 0.0, valid,
+        external_landing_mark_max_age_sec_);
     return ready;
 }
 

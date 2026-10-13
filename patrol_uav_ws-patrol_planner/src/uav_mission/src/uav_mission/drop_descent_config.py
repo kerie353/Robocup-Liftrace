@@ -2,6 +2,13 @@
 import math
 
 
+def drop_horizontal_compensation_mode(settings):
+    mode = settings.get('drop_horizontal_compensation_mode', 2)
+    if type(mode) is not int or mode not in (1, 2):
+        raise ValueError('drop_horizontal_compensation_mode must be 1 or 2')
+    return mode
+
+
 def drop_descent_parameters(settings):
     mode = settings.get('drop_descent_mode', 1)
     speed = settings.get('drop_descent_speed_mps', 0.20)

@@ -60,7 +60,7 @@ EXTRA_CASES = r'''
  }else if(name=="narrow_circle" || name=="narrow_cross"){
   const bool cross=name=="narrow_cross";narrowPrepare(c,cross);
   narrowSample(c,119.999);assert(!c.compensatedDropSettled(true));
-  narrowSample(c,120.,1.);assert(!c.compensatedDropSettled(true));
+  narrowSample(c,120.,1.);assert(c.compensatedDropSettled(true));
   narrowSample(c,120.001,.4);assert(c.compensatedDropSettled(true));
   assert(c.executeDropAction(1)==DropActionResult::kPending&&c.servo_action_attempted_);
   for(int i=0;i<100;++i)c.executeDropAction(1);
@@ -74,11 +74,12 @@ EXTRA_CASES = r'''
   assert(c.detect_point_counter==1&&!c.have_planner_cmd&&c.external_waiting_for_motion_);
   assert(c.drop_alignment_started_.isZero()&&t->calls==1);
  }else if(name=="narrow_guards"){
-  for(int n=0;n<20;++n){
+  for(int n=0;n<18;++n){
    ros::clock_sec=100.;LLController d;narrowPrepare(d);narrowSample(d,120.);
    if(n==0)d.compensated_goal_frozen_=false;
    if(n==1)d.drop_descent_started_=false;
-   if(n==2)d.permission_ready=false;
+   if(n==2){d.permission_ready=false;assert(d.compensatedDropSettled(true));
+    assert(d.executeDropAction(1)==DropActionResult::kRejected);continue;}
    if(n==3)d.servo_alignment_context_.active=false;
    if(n==4)d.servo_alignment_context_.payload_slot=2;
    if(n==5)d.servo_alignment_context_.semantic_target_id++;
@@ -95,17 +96,18 @@ EXTRA_CASES = r'''
    if(n==15)d.servo_alignment_context_.semantic_target_first_seen=ros::Time(91);
    if(n==16)d.servo_alignment_context_.align_mode="drop_cross";
    if(n==17)d.servo_alignment_context_.semantic_target_class="tent";
-   if(n==18)d.motion_odom_.pose.pose.position.z=.451;
-   if(n==19)d.motion_odom_.pose.pose.position.z=.349;
    assert(!d.compensatedDropSettled(true));
   }
  }else if(name=="narrow_serial"){
   narrowPrepare(c);c.drop_compensate_before_descent_=true;c.drop_descent_started_=false;
+  c.drop_descent_started_at_=ros::Time(0);
   for(int i=0;i<30;++i){narrowSample(c,120+i*.1,1.,.08,0);
    close(c.compensatedDropCommandHeight(),1.);assert(!c.drop_descent_started_);
    assert(!c.compensatedDropSettled(true,nullptr,nullptr,false));}
   narrowSample(c,123,1.,0,.8);close(c.compensatedDropCommandHeight(),.4);
-  assert(c.drop_descent_started_);narrowSample(c,125,.4);assert(c.compensatedDropSettled(true));
+  assert(c.drop_descent_started_);close(c.drop_descent_started_at_.toSec(),123);
+  narrowSample(c,142.999,1.,.8);assert(!c.compensatedDropSettled(true));
+  narrowSample(c,143,1.,.8);assert(c.compensatedDropSettled(true));
  }else if(name=="narrow_normal_disabled"){
   narrowPrepare(c);narrowSample(c,101,.4,0,.8);
   c.drop_settle_config_.stable_duration_sec=100;c.drop_settle_config_.min_samples=1000;
@@ -174,7 +176,7 @@ class NarrowDropTimeout(unittest.TestCase):
     run_case = geometry.CompensatedDropGeometryTests.run_case
     def test_standard_timeout_release_once_and_normal_ack_recovery(self): self.run_case('narrow_circle')
     def test_red_cross_timeout_release_once_and_normal_ack_recovery(self): self.run_case('narrow_cross')
-    def test_freeze_descent_permission_identity_deadline_feedback_height_guards(self): self.run_case('narrow_guards')
+    def test_freeze_descent_permission_identity_deadline_feedback_guards(self): self.run_case('narrow_guards')
     def test_timeout_never_skips_independent_pre_descent_xy(self): self.run_case('narrow_serial')
     def test_normal_precision_immediate_and_disabled_timeout_restores_xy(self): self.run_case('narrow_normal_disabled')
     def test_clock_rollback_latches_fallback_off_but_normal_precision_remains(self): self.run_case('narrow_clock')

@@ -81,8 +81,9 @@ def flight_geometry(settings):
     return area
 
 def validate_settings(settings):
-    from uav_mission.drop_descent_config import drop_descent_parameters
+    from uav_mission.drop_descent_config import drop_descent_parameters, drop_horizontal_compensation_mode
     drop_descent_parameters(settings)
+    drop_horizontal_compensation_mode(settings)
     release_heights(settings)
     lead=settings.get('takeoff_z_lead_m',0.)
     if isinstance(lead,bool) or not isinstance(lead,(int,float)) or not math.isfinite(lead) or not (lead==0 or .4<=lead<=.6):
@@ -260,8 +261,9 @@ def generate(root,out,settings,fc_xyz,rig):
     control['takeoff_z_lead_m']=float(settings.get('takeoff_z_lead_m',0.))
     control['switch']['auto_land']=h_landing;control['drop_system'].update(enable_drop=drop_enabled,
         release_setpoint_height=drop,release_min_height=ground+release_min,height_threshold=ground+release_max)
-    from uav_mission.drop_descent_config import drop_descent_parameters
+    from uav_mission.drop_descent_config import drop_descent_parameters, drop_horizontal_compensation_mode
     control['drop_system']['descent'] = drop_descent_parameters(settings)
+    control['drop_system']['pre_descent']['mode'] = drop_horizontal_compensation_mode(settings)
     control['switch']['flag_landing_detect']=1 if h_landing else 0
     control['uav_vision'].update(recovery_height=low,
         standard_recovery_setpoint_height=low+.10,cross_recovery_setpoint_height=low+.10,

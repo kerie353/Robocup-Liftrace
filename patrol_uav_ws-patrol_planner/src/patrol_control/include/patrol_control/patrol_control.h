@@ -133,7 +133,7 @@ private:
     bool drop_release_height_only_ = true;
     bool drop_release_timeout_enabled_ = true;
     double drop_release_timeout_sec_ = 20.0;
-    ros::Time drop_alignment_started_, drop_timeout_last_check_;
+    ros::Time drop_alignment_started_, drop_descent_started_at_, drop_timeout_last_check_;
     bool drop_timeout_clock_invalid_ = false;
     DropDescentConfig drop_descent_config_;
     DropDescentProfile drop_descent_profile_;
@@ -148,6 +148,8 @@ private:
     double drop_red_cross_xy_tolerance_m_ = 0.04;
     LandingHandoffStabilityWindow drop_capture_window_, drop_release_window_;
     DropPreDescentStabilityConfig drop_pre_descent_config_;
+    int drop_horizontal_compensation_mode_ = 2;
+    double drop_pre_descent_stable_xy_tolerance_m_ = 0.04;
     double drop_pre_descent_red_cross_xy_tolerance_m_ = 0.04;
     DropPreDescentStabilityWindow drop_pre_descent_window_;
     LandingHandoffStabilityWindow landing_capture_window_, landing_handoff_window_;

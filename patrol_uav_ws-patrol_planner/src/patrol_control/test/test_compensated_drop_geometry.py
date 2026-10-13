@@ -138,7 +138,9 @@ public:
  bool drop_release_height_only_=true;
  bool drop_release_timeout_enabled_=true,drop_timeout_clock_invalid_=false;
  double drop_release_timeout_sec_=20.;
- ros::Time drop_alignment_started_,drop_timeout_last_check_;
+ ros::Time drop_alignment_started_,drop_descent_started_at_,drop_timeout_last_check_;
+ int drop_horizontal_compensation_mode_=2;
+ double drop_pre_descent_stable_xy_tolerance_m_=.04;
  DropDescentConfig drop_descent_config_;
  DropDescentProfile drop_descent_profile_;
  bool dropDescentControlActive() const;
@@ -489,7 +491,26 @@ int main(int argc,char**argv){
      finish(d,transport);assert(transport->calls==1);
      close(d.compensated_fc_goal_.pose.position.x,g.x);close(d.compensated_fc_goal_.pose.position.y,g.y);
     }
-  }else if(name=="serial_pre_parameters"){
+ }else if(name=="serial_stability_modes"){
+   // Mode 1 restores the original 4cm / 0.1m/s / 1s gate for every descent lane.
+   for(int lane=1;lane<=3;++lane){
+    ros::clock_sec=100;LLController d;
+    d.nh_.values["drop_system/descent/mode"]=lane;
+    d.loadDropSequenceConfig();
+    d.nh_.values["drop_system/pre_descent/mode"]=1;
+    d.loadRedCrossXYTolerance();capture(d);const auto g=d.compensated_fc_goal_.pose.position;
+    odom(d,101,g.x,g.y,1,.101);close(d.compensatedDropCommandHeight(),1);
+    odom(d,101.1,g.x+.041,g.y,1,0);close(d.compensatedDropCommandHeight(),1);
+    for(int i=0;i<10;++i){odom(d,101.2+i*.1,g.x,g.y,1,.1);
+     close(d.compensatedDropCommandHeight(),1);assert(!d.drop_descent_started_);}
+    // A repeated sample cannot finish the window.
+    close(d.compensatedDropCommandHeight(),1);
+    odom(d,102.2,g.x,g.y,1,.1);close(d.compensatedDropCommandHeight(),.4);
+    close(d.drop_descent_started_at_.toSec(),102.2);
+    odom(d,105,g.x,g.y,.8,.8);close(d.compensatedDropCommandHeight(),.4);
+    close(d.drop_descent_started_at_.toSec(),102.2);
+   }
+ }else if(name=="serial_pre_parameters"){
    close(c.drop_pre_descent_config_.xy_tolerance_m,.06);
    close(c.drop_pre_descent_red_cross_xy_tolerance_m_,.04);
    c.nh_.values["drop_system/pre_descent/xy_tolerance_m"]=.055;
@@ -1158,6 +1179,7 @@ class CompensatedDropGeometryTests(unittest.TestCase):
     def test_bound_standard_red_cross_and_unknown_class_thresholds(self): self.run_case('class_thresholds')
     def test_semantic_class_not_geometry_mode_selects_threshold(self): self.run_case('class_mode')
     def test_live_class_change_cannot_loosen_frozen_transaction(self): self.run_case('class_binding')
+    def test_stable_compensation_mode_requires_speed_and_one_second_for_all_descent_lanes(self): self.run_case('serial_stability_modes')
     def test_red_cross_parameter_is_independent_and_unknown_remains_capped(self): self.run_case('class_parameters')
     def test_red_cross_default_and_invalid_parameter_values(self): self.run_case('red_parameters_invalid')
     def test_standard_and_red_cross_exact_threshold_equality_rejected(self): self.run_case('class_boundary')

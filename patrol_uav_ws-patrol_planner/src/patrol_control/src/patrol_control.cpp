@@ -2184,6 +2184,11 @@ void LLController::load_params() {
     if (!std::isfinite(drop_red_cross_xy_tolerance_m_) || drop_red_cross_xy_tolerance_m_ <= 0.0)
         throw std::invalid_argument("invalid red cross drop XY tolerance");
     const std::string pre_descent_root = "drop_system/pre_descent";
+    drop_horizontal_compensation_mode_ = nh_.param(pre_descent_root + "/mode", 2);
+    drop_pre_descent_stable_xy_tolerance_m_ = nh_.param(pre_descent_root + "/stable_xy_tolerance_m", 0.04);
+    if ((drop_horizontal_compensation_mode_ != 1 && drop_horizontal_compensation_mode_ != 2) ||
+        !std::isfinite(drop_pre_descent_stable_xy_tolerance_m_) || drop_pre_descent_stable_xy_tolerance_m_ <= 0.0)
+        throw std::invalid_argument("invalid horizontal compensation mode or stable XY tolerance");
     drop_pre_descent_config_.xy_tolerance_m = nh_.param(pre_descent_root + "/xy_tolerance_m", 0.06);
     drop_pre_descent_red_cross_xy_tolerance_m_ = nh_.param(
         pre_descent_root + "/red_cross_xy_tolerance_m", 0.04);
@@ -2197,8 +2202,11 @@ void LLController::load_params() {
     drop_pre_descent_config_.max_sample_gap_sec = nh_.param(pre_descent_root + "/max_sample_gap_sec", 0.20);
     const int pre_descent_samples = nh_.param(pre_descent_root + "/min_samples", 3);
     drop_pre_descent_config_.min_samples = std::max(0, pre_descent_samples);
-    if (!drop_pre_descent_config_.valid()) throw std::invalid_argument("invalid pre-descent configuration");
-    drop_pre_descent_window_ = DropPreDescentStabilityWindow(drop_pre_descent_config_);
+    if (!drop_pre_descent_config_.valid(drop_horizontal_compensation_mode_ == 1))
+        throw std::invalid_argument("invalid pre-descent configuration");
+    auto stable_config = drop_pre_descent_config_;
+    stable_config.xy_tolerance_m = drop_pre_descent_stable_xy_tolerance_m_;
+    drop_pre_descent_window_ = DropPreDescentStabilityWindow(stable_config);
     landing_settle_config_.height_tolerance_m = 0.05;
     landing_settle_config_.max_horizontal_speed_mps = 0.10;
     landing_settle_config_.max_vertical_speed_mps = 0.10;
@@ -4048,6 +4056,8 @@ bool LLController::setCompensatedDropTarget(geometry_msgs::PoseStamped* target) 
 }
 
 double LLController::compensatedDropXYTolerance(bool release) const {
+    if (!release && drop_horizontal_compensation_mode_ == 1)
+        return drop_pre_descent_stable_xy_tolerance_m_;
     // Only the bound mission class may select the standard-board tolerance.
     const auto& cls = compensated_context_.semantic_target_class;
     if (cls == "tent" || cls == "pillbox" || cls == "bridge" || cls == "panzer")
@@ -4062,19 +4072,17 @@ double LLController::compensatedDropXYTolerance(bool release) const {
 
 bool LLController::compensatedDropTimeoutReady() {
     const ros::Time now = ros::Time::now();
-    // Observe time even while capture/descent/permission is pending. A rollback
-    // disables only this fallback until the next ALIGN; normal precision remains.
-    if (!std::isfinite(now.toSec()) || (!drop_alignment_started_.isZero() &&
+    // Countdown starts on the first successful descent transition, not ALIGN.
+    // No dependency on permission here: the arbiter consumes our fresh timeout
+    // feedback before granting the matching authorization.
+    if (!std::isfinite(now.toSec()) || (!drop_descent_started_at_.isZero() &&
         (now - drop_timeout_last_check_).toSec() < 0.0)) drop_timeout_clock_invalid_ = true;
     drop_timeout_last_check_ = now;
-    // Binding, fresh motion, release height, flight state and boundary are
-    // enforced by the enclosing normal release path, exactly as before.
     return drop_release_timeout_enabled_ && !drop_timeout_clock_invalid_ &&
-        !drop_alignment_started_.isZero() &&
-        (now - drop_alignment_started_).toSec() >= drop_release_timeout_sec_ &&
+        !drop_descent_started_at_.isZero() &&
+        (now - drop_descent_started_at_).toSec() >= drop_release_timeout_sec_ &&
         external_mission_mode_ && compensated_alignment_enabled_ &&
-        compensated_goal_frozen_ && drop_descent_started_ &&
-        hasFreshMissionReleasePermission();
+        compensated_goal_frozen_ && drop_descent_started_;
 }
 
 bool LLController::compensatedDropSettled(bool release, double* error, double* speed,
@@ -4124,10 +4132,19 @@ bool LLController::compensatedDropSettled(bool release, double* error, double* s
     if (!release && (source_age < 0.0 || source_age > drop_offset_timeout_)) {window.reset(); return false;}
     // Capture keeps visual identity/geometry/freshness, but does not wait for
     // release-level position, velocity, height or a motion stability window.
-    // Final release uses the current fresh motion sample without recapture.
-    // Pre-descent checks current double XY only, independently of final release.
+    // Final release uses fresh motion without recapture. Pre-descent selects
+    // current XY or the separate XY/speed/duration window, never final geometry.
     if (!release) return externalLandingControlReady(ros::Time::now());
     if (!require_release_height) {
+        if (drop_horizontal_compensation_mode_ == 1) {
+            const auto result = drop_pre_descent_window_.update(now,
+                motion_odom_.header.stamp.toSec(), motion_odom_receipt_.toSec(),
+                xy_error, horizontal_speed, externalLandingControlReady(ros::Time::now()));
+            ROS_INFO_THROTTLE(1.0,
+                "[DropGeometry] pre_descent mode=1 reason=%s xy=%.4f speed=%.4f span=%.3f samples=%zu",
+                result.reason, xy_error, horizontal_speed, result.stable_for_sec, result.sample_count);
+            return result.ready;
+        }
         const double xy_tolerance = compensatedDropXYTolerance(false);
         const bool ready = std::isfinite(xy_error) && xy_error < xy_tolerance &&
             now-motion_odom_.header.stamp.toSec() <= drop_pre_descent_config_.max_odom_age_sec &&
@@ -4146,11 +4163,11 @@ bool LLController::compensatedDropSettled(bool release, double* error, double* s
     const double xy_tolerance = compensatedDropXYTolerance();
     const bool timeout_release = require_release_height && timeout_fallback;
     // Independent pre-descent XY correction remains mandatory in serial mode.
-    // Once descending, height-only release ignores horizontal error magnitude;
-    // fresh feedback, bound context, flight-state and actuator permission stay.
+    // Normal height-only release ignores XY. After the descent timeout both
+    // XY and height are bypassed; fresh feedback, binding and flight state stay.
     const bool ready = std::isfinite(xy_error) && std::isfinite(horizontal_speed) &&
         std::isfinite(pos.z) && (drop_release_height_only_ || xy_error < xy_tolerance || timeout_release) &&
-        (!require_release_height ||
+        (timeout_release || !require_release_height ||
          (pos.z >= drop_release_min_height_ && pos.z <= drop_height_threshold)) &&
         externalLandingControlReady(ros::Time::now());
     if (!ready) ROS_INFO_THROTTLE(1.0,
@@ -4158,10 +4175,10 @@ bool LLController::compensatedDropSettled(bool release, double* error, double* s
         "xy_tolerance=%.3f class=%s release_xy_check=%s",
         xy_error,horizontal_speed,velocity.z(),pos.z,drop_release_min_height_,drop_height_threshold,
         xy_tolerance,b.semantic_target_class.c_str(),drop_release_height_only_ ? "disabled" : "enabled");
-    else if (timeout_release && !drop_release_height_only_ && xy_error >= xy_tolerance)
-        ROS_WARN_THROTTLE(1.0, "[DropTimeout] compensated_low_release slot=%u decision=%u "
-            "align_elapsed=%.3f xy=%.4f fc_z=%.4f; original permission and height remain required",
-            c.payload_slot, c.decision_seq, (ros::Time::now()-drop_alignment_started_).toSec(),
+    else if (timeout_release)
+        ROS_WARN_THROTTLE(1.0, "[DropTimeout] descent_timeout_release slot=%u decision=%u "
+            "descent_elapsed=%.3f xy=%.4f fc_z=%.4f; geometry bypass, matching permission required",
+            c.payload_slot, c.decision_seq, (ros::Time::now()-drop_descent_started_at_).toSec(),
             xy_error,pos.z);
     else if (require_release_height) ROS_INFO(
         "[DropGeometry] release_ready slot=%u decision=%u fc_xy_error=%.4f outlet_xy_error=%.4f "
@@ -4200,9 +4217,12 @@ double LLController::compensatedDropCommandHeight() {
             if (!drop_descent_profile_.start(initial_z, drop_release_setpoint_height_,
                                              ros::Time::now().toSec())) {
                 drop_descent_started_ = false;
+                drop_descent_started_at_ = ros::Time(0);
                 return external_alignment_capture_height_;
             }
         }
+        drop_descent_started_at_ = drop_timeout_last_check_ = ros::Time::now();
+        drop_timeout_clock_invalid_ = false;
         ROS_INFO("[DropGeometry] descent_mode=%d z_speed=%.3f z_initial=%.4f",
             drop_descent_config_.mode,drop_descent_config_.speed_mps,
             drop_descent_config_.mode == 1 ? uav_pose.pose.position.z : drop_descent_profile_.height());
@@ -4225,6 +4245,7 @@ bool LLController::freezeCompensatedDropTarget() {
     if (!uav_drop_ready_ || age < 0.0 || age > drop_offset_timeout_) return false;
     compensated_goal_frozen_ = true;
     drop_descent_started_ = false;
+    drop_descent_started_at_ = ros::Time(0);
     drop_descent_profile_.reset();
     drop_release_window_.reset();
     drop_pre_descent_window_.reset();
@@ -4265,6 +4286,12 @@ void LLController::publishCompensatedAlignment() {
         motion_reason ? motion_reason :
         (ready ? (compensated_goal_frozen_ ? "frozen_capture_geometry_valid" : "capture_geometry_valid") :
                  "compensated_not_ready");
+    // Explicit delivery-only state; arbiter still validates the current action,
+    // fresh odom, flight feedback and cancellation before issuing permission.
+    if (feedback.valid && !motion_reason && !compensated_target_outside_boundary_ &&
+        compensated_goal_frozen_ && compensatedDropTimeoutReady() &&
+        externalLandingControlReady(ros::Time::now()))
+        feedback.reason = "descent_timeout_ready";
     compensated_alignment_pub_.publish(feedback);
 }
 
@@ -4358,7 +4385,7 @@ void LLController::servoAlignmentContextCallback(
             msg->semantic_target_first_seen == servo_alignment_context_.semantic_target_first_seen &&
             msg->semantic_target_class == servo_alignment_context_.semantic_target_class) {
             have_servo_alignment_context_ = false;
-            drop_alignment_started_ = ros::Time(0);
+            drop_alignment_started_ = drop_descent_started_at_ = ros::Time(0);
             // Revocation blocks future submissions. The proxy owns the raw-call
             // fence; do not discard an already queued RPC's terminal result.
             // In particular ReleaseResult may precede the matching RPC reply.
@@ -4534,6 +4561,7 @@ void LLController::resetDropState() {
     compensated_target_outside_boundary_ = false;
     compensated_goal_valid_ = compensated_goal_frozen_ = false;
     drop_descent_started_ = false;
+    drop_descent_started_at_ = ros::Time(0);
     drop_descent_profile_.reset();
     compensated_observation_stamp_ = ros::Time(0);
     drop_capture_window_.reset();
@@ -4811,6 +4839,7 @@ void LLController::resetDetectionState() {
     compensated_target_outside_boundary_ = false;
     compensated_goal_valid_ = compensated_goal_frozen_ = false;
     drop_descent_started_ = false;
+    drop_descent_started_at_ = ros::Time(0);
     drop_descent_profile_.reset();
     compensated_observation_stamp_ = ros::Time(0);
     drop_capture_window_.reset();

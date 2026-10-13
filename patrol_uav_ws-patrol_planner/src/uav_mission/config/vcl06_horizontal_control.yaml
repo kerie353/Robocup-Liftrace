@@ -70,8 +70,8 @@ motion_feedback:
   odom_topic: /mavros/local_position/odom
   twist_frame: child
 drop_system:
-  # 从进入 ALIGN 起计时；仅对已冻结、已下降且当前原高度窗口和原许可成立的事务，
-  # 满20秒后解除精细XY等待；高度窗口、其他门槛及H控制保持原参数。
+  # 从成功进入下降起计时；满20秒不再等待XY/高度，走同身份异步投递许可。
+  # 取消、有效反馈、飞行状态、边界与防重复仍保留；不影响H降落。
   release_timeout:
     enabled: true
     after_sec: 20.0
@@ -81,13 +81,14 @@ drop_system:
     max_step_dt_sec: 0.20
     zero_velocity_setpoint_topic: /navigation/drop_setpoint_vertical
   release_height_only: true  # 下降后释放几何仅检查高度；保留任务、反馈及执行许可
-  compensate_before_descent: true  # 当前补偿到位即下降，不要求速度或累计停稳
-  # 下降前仅检查当前双XY；速度/稳窗字段兼容保留，不阻止下降。
+  compensate_before_descent: true
   pre_descent:
+    mode: 2  # 1=双XY+速度连续停稳；2=当前双XY达标即下降
+    stable_xy_tolerance_m: 0.04  # 模式1：FC及投口均<=4cm
     xy_tolerance_m: 0.06
     red_cross_xy_tolerance_m: 0.04
-    max_horizontal_speed_mps: 0.10
-    stable_duration_sec: 1.0
+    max_horizontal_speed_mps: 0.10  # 模式1使用
+    stable_duration_sec: 1.0  # 模式1使用
     max_odom_age_sec: 0.20
     max_sample_gap_sec: 0.20
     min_samples: 3

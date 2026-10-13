@@ -16,13 +16,15 @@ struct DropPreDescentStabilityConfig {
     double max_sample_gap_sec = 0.20;
     std::size_t min_samples = 3;
 
-    bool valid() const {
-        // The controller uses only current XY and freshness. Legacy speed,
-        // duration and sample fields remain readable but cannot gate descent.
+    bool valid(bool require_stability = true) const {
         const double values[] = {xy_tolerance_m, max_odom_age_sec};
         for (double value : values)
             if (!std::isfinite(value) || value <= 0.0) return false;
-        return true;
+        if (!require_stability) return true;
+        const double stability[] = {max_horizontal_speed_mps, stable_duration_sec, max_sample_gap_sec};
+        for (double value : stability)
+            if (!std::isfinite(value) || value <= 0.0) return false;
+        return min_samples >= 3;
     }
 };
 

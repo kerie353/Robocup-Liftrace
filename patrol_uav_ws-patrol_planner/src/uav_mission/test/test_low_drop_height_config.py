@@ -19,7 +19,7 @@ class LowDropHeightConfig(unittest.TestCase):
         settings = yaml.safe_load((base/'08_full_mission/settings.yaml').read_text())
         site = yaml.safe_load((base/'08_full_mission/site_20261007_221730.yaml').read_text())
         apply_site_profile(settings, site)
-        self.assertEqual([settings[k] for k in ('drop_agl','release_min_agl','release_max_agl')], [.20,.15,.40])
+        self.assertEqual([settings[k] for k in ('drop_agl','release_min_agl','release_max_agl')], [.15,.10,.43])
         self.assertEqual([settings[k] for k in ('drop_descent_mode','landing_descent_mode')], [2,2])
         self.assertEqual([settings[k] for k in ('drop_descent_speed_mps','landing_descent_speed_mps')], [1.,1.])
         self.assertEqual([p['y'] for p in settings['corridor_waypoints']], [1.9,1.9,1.,-3.45])
@@ -28,7 +28,7 @@ class LowDropHeightConfig(unittest.TestCase):
             ref = generate(ROOT, out, settings, (.02,-.01,.12), rig)
             control = yaml.safe_load((Path(out)/'control.yaml').read_text())
         drop = control['drop_system']
-        for key, agl in [('release_setpoint_height',.20),('release_min_height',.15),('height_threshold',.40)]:
+        for key, agl in [('release_setpoint_height',.15),('release_min_height',.10),('height_threshold',.43)]:
             self.assertAlmostEqual(drop[key]-ref['ground_z'], agl)
         self.assertEqual(drop['descent']['speed_mps'], 1.)
         self.assertEqual(control['external_landing']['descent']['speed_mps'], 1.)
@@ -53,7 +53,7 @@ class LowDropHeightConfig(unittest.TestCase):
             for fc_z in (0.,.004678211873397231,.12):
                 with self.subTest(entry=name,fc_z=fc_z):
                     original=copy.deepcopy(settings);controls=[]
-                    for lower,target,upper in ((.35,.40,.45),(.15,.20,.40)):
+                    for lower,target,upper in ((.35,.40,.45),(.15,.20,.40),(.10,.15,.43)):
                         selected=dict(settings,release_min_agl=lower,drop_agl=target,release_max_agl=upper)
                         with tempfile.TemporaryDirectory() as out:
                             ref=generate(ROOT,out,selected,(.02,-.01,fc_z),rig)
@@ -65,11 +65,11 @@ class LowDropHeightConfig(unittest.TestCase):
                         self.assertAlmostEqual(overrides['/release_permission_arbiter/min_release_altitude']-ground,lower-.08)
                         self.assertAlmostEqual(overrides['/release_permission_arbiter/max_release_altitude']-ground,upper+.02)
                         controls.append(control)
-                    self.assertEqual(controls[0],controls[1]);self.assertEqual(settings,original)
+                    self.assertTrue(all(c==controls[0] for c in controls[1:]));self.assertEqual(settings,original)
 
     def test_invalid_target_order_and_nonfinite_values_still_rejected(self):
         for name,generate,settings,rig in self.entries():
-            for lower,target,upper in ((.15,.199,.4),(.21,.2,.4),(.15,.2,.19),(.15,float('nan'),.4)):
+            for lower,target,upper in ((.10,.149,.43),(.21,.2,.4),(.15,.2,.19),(.15,float('nan'),.4)):
                 with self.subTest(entry=name,values=(lower,target,upper)),tempfile.TemporaryDirectory() as out:
                     with self.assertRaises(ValueError):
                         generate(ROOT,out,dict(settings,release_min_agl=lower,drop_agl=target,release_max_agl=upper),(.02,-.01,0.),rig)

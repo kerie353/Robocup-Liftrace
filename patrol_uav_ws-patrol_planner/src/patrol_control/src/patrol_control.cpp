@@ -2506,7 +2506,7 @@ void LLController::load_params() {
     const bool invalid_drop_height_bounds = calibrated_drop_z
         ? (!std::isfinite(drop_ground_z_) ||
            drop_release_min_height_ - drop_ground_z_ <= 0.0 ||
-           drop_release_setpoint_height_ - drop_ground_z_ < 0.20 - 1e-9 ||
+           drop_release_setpoint_height_ - drop_ground_z_ < 0.15 - 1e-9 ||
            drop_height_threshold - drop_ground_z_ > 1.1 + 1e-9)
         : (drop_height_threshold <= 0.0 || drop_height_threshold > 1.0 ||
            drop_release_setpoint_height_ <= 0.05 || drop_release_min_height_ <= 0.05);

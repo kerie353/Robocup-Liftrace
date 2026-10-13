@@ -26,3 +26,11 @@ landing_descent_speed_mps: 3.0
 - 板端生效需要SSH认证、同步上述Python/C++源文件、重新生成配置及重新编译控制器；仅放宽Python检查不能绕过旧二进制的1m/s校验。本次未推送GitHub、未修改/重启板端程序。
 
 修改前工作区快照：`C:/Users/lihaoEN/Desktop/ssh/tmp/mode2_speed_limit_20261014/before`。其他任务的现有改动保留。
+
+## 后续板端同步与构建：已完成
+
+同日通过用户授权的密码SSH登录 `10.189.79.232`，在用户确认路径 `/home/orangepi/liftrace_board_trials_20260928` 仅应用上述3个源码文件的限定差异。板端18项参数边界检查通过，原现场和未提交业务改动保留；板端源码提交 `bed0475d`。
+
+已先说明C++上限生效需要构建，随后仅执行现有构建目录的 `make patrol_control/fast -j2`，返回0，生成 `patrol_uav_ws-patrol_planner/devel/lib/patrol_control/patrol_control`。构建记录提交 `fc807d69`；源码、旧二进制和日志备份在 `/home/orangepi/.codex_backups/mode2_speed_limit_20261014_004220`。
+
+两种模式二当前现场实际速度仍为1.0m/s，上限已允许配置到3.0m/s。未启动ROS、飞行或舵机，未推送GitHub。上节的SSH失败及未编译描述保留为初次处理记录，板端当前状态以本节为准。

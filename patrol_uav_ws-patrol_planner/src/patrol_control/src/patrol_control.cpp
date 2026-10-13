@@ -1002,7 +1002,8 @@ void LLController::externalLandingTick() {
     const bool handoff_settled = external_landing_handoff_mode_ != "POSCTL" ||
         landingMotionSettled(true, horizontal_error);
     if (uav_pose.pose.position.z <= external_landing_auto_land_height_ &&
-        horizontal_error <= external_landing_alignment_tolerance_ && handoff_settled) {
+        (external_landing_handoff_mode_ == "POSCTL" ||
+         horizontal_error <= external_landing_alignment_tolerance_) && handoff_settled) {
         if (!auto_land) {
             ROS_ERROR_THROTTLE(
                 2.0,
@@ -4387,6 +4388,7 @@ bool LLController::landingMotionSettled(bool handoff, double xy_error) {
     sample.z_error_m=sample.height_m-(handoff ? land_height : external_landing_capture_height_);
     sample.controlled_descent=handoff;
     sample.check_vertical_speed=!handoff;
+    sample.check_horizontal_motion=!handoff;
     sample.horizontal_speed_mps=sample.feedback_valid ? v.head<2>().norm() : 0.0;
     sample.vertical_speed_mps=sample.feedback_valid ? v.z() : 0.0;
     sample.alignment_latched=handoff ? external_landing_alignment_complete_ : true;

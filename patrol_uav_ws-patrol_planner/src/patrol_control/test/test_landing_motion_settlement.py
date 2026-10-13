@@ -123,19 +123,22 @@ int main(int argc, char** argv) {
             assert(c.set_mode_client.calls==(i==4 ? 1 : 0));
         }
         assert(c.external_landing_auto_land_requested_);
-    } else if (name=="low_ceiling_lower_bound_xy_and_fast_motion_reject") {
+    } else if (name=="low_height_only_ceiling_lower_bound_and_fast_motion_permits") {
         frozen(c);
-        for (int kind=0;kind<4;++kind) {
+        c.external_landing_auto_land_height_=.50;
+        for (int kind=0;kind<2;++kind) {
             for (int i=0;i<6;++i) {
-                feedback(c,ros::clock+.04,kind==0 ? .401 : (kind==1 ? .299 : .35),
-                    kind==2 ? .051 : 0.,kind==3 ? .101 : 0.,false, -.8);
+                feedback(c,ros::clock+.04,kind==0 ? .501 : .299,
+                    .20,.30,false,-.8);
                 c.externalLandingTick();
                 assert(c.set_mode_client.calls==0);
             }
         }
         const double start=ros::clock+.04;
         for (int i=0;i<5;++i) {
-            feedback(c,start+i*.04,.35,0.,.10,false,-.8);
+            // Height permits handoff above the former .40 m ceiling even when
+            // XY/speed exceed both old inner and outer horizontal thresholds.
+            feedback(c,start+i*.04,.45,.20,.30,false,-.8);
             c.externalLandingTick();
             assert(c.set_mode_client.calls==(i==4 ? 1 : 0));
         }
@@ -274,7 +277,7 @@ for _case in ('capture_original_ten_fresh_h_and_xy_without_motion_window',
               'capture_stale_h_and_bad_xy_reset_visual_count',
               'high_capture_independent_height_tolerance_knowledge',
               'low_accepts_controlled_descent_after_point_fifteen_seconds',
-              'low_ceiling_lower_bound_xy_and_fast_motion_reject',
+              'low_height_only_ceiling_lower_bound_and_fast_motion_permits',
               'low_duplicate_source_does_not_accumulate_dwell',
               'low_odom_gap_restarts_fresh_feedback_window',
               'low_pending_3ms_keeps_window_without_early_posctl',

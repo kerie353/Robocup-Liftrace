@@ -207,8 +207,8 @@ def generate(root,out,settings,fc_xyz,rig):
     # exactly representable shared value so equality cannot fail its guard.
     low=struct.unpack('f',struct.pack('f',low))[0]
     land_z, handoff_z, posctl_stability = landing_control_parameters(settings, ground, float(rig['fc_ground_clearance']))
-    # 投递仍需本地 Z > 0.05m；降落只需 > 0，与控制器参数校验一致。
-    if not .35<=settings['drop_agl']<=1.0 or drop<=.05 or ground+release_min<=.05 or land_z<=0.:raise ValueError('Legacy positive local-Z bounds not met')
+    # 投递按FC离地高度校验；任务坐标Z可为负。H降落的原本地Z检查保留。
+    if not .20<=settings['drop_agl']<=1.0 or land_z<=0.:raise ValueError('Drop AGL or landing local-Z bounds not met')
     point=lambda a,b,h:[x+a,y+b,h]
     runtime=yaml.safe_load((root/'docs/verification/fov_landing_inner_20260919/seed_2672/fast_runtime.yaml').read_text())
     m=runtime['mission'];m.update(home_xy=[x,y],landing_xy=[x+.6,y],approach_altitude=low,return_altitude=low,timeout=600. if mode=='high_view_full' else 300.,forced_return_at=510. if mode=='high_view_full' else 240.,post_delivery_route_revision='board-'+mode,

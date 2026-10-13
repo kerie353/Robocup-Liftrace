@@ -54,14 +54,17 @@ class DropHeightConfigTests(unittest.TestCase):
         self.assertAlmostEqual(overrides['/release_permission_arbiter/max_release_altitude']-ground, .47)
         self.assertEqual(settings, original)
 
-    def test_positive_setpoint_does_not_hide_invalid_local_release_floor(self):
+    def test_shifted_origin_preserves_valid_agl_release_floor(self):
         settings = yaml.safe_load((ROOT/'deployment/competition/field_20261007_validated.yaml').read_text())
         settings.update(drop_agl=.40, release_min_agl=.35, release_max_agl=.45)
         validate(settings, flight=True)
         rig = yaml.safe_load((ROOT/'patrol_uav_ws-patrol_planner/src/uav_mission/config/competition/known_rig.yaml').read_text())
-        # ground=-.31: target local Z=.09 is valid but release floor local Z=.04 is not.
-        with tempfile.TemporaryDirectory() as path, self.assertRaisesRegex(ValueError, 'positive local-Z'):
-            generate(ROOT, path, settings, (0, 0, -.09), rig)
+        # A shifted local origin must not invalidate a positive AGL floor.
+        with tempfile.TemporaryDirectory() as path:
+            ref = generate(ROOT, path, settings, (0, 0, -.09), rig)
+            control = yaml.safe_load((Path(path)/'control.yaml').read_text())['drop_system']
+        self.assertAlmostEqual(control['release_min_height'], .04)
+        self.assertAlmostEqual(control['release_min_height']-ref['ground_z'], .35)
 
 
 if __name__ == '__main__':

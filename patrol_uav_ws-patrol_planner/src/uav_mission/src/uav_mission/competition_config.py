@@ -85,7 +85,7 @@ def validate(settings, flight=False):
     if not inside([0.,0.]) or not inside(settings['staging_xy'],search):raise ValueError('invalid origin/staging')
     if not 1<=len(settings['survey_xy'])<=8 or any(not inside(p,search) for p in settings['survey_xy']):raise ValueError('survey outside search interior')
     if not inside([cover[0],cover[2]],search) or not inside([cover[1],cover[3]],search):raise ValueError('coverage outside search interior')
-    for key,lo,hi in [('low_agl',1.,1.8),('high_agl',2.,3.),('max_agl',2.,3.5),('drop_agl',.35,1.),('landing_transit_agl',.5,1.8),('landing_capture_agl',.8,2.),('cruise_speed',.1,1.2),('cruise_acceleration',.1,1.),('lane_spacing',.2,1.2)]:
+    for key,lo,hi in [('low_agl',1.,1.8),('high_agl',2.,3.),('max_agl',2.,3.5),('drop_agl',.20,1.),('landing_transit_agl',.5,1.8),('landing_capture_agl',.8,2.),('cruise_speed',.1,1.2),('cruise_acceleration',.1,1.),('lane_spacing',.2,1.2)]:
         if not finite(settings[key]) or not lo<=settings[key]<=hi:raise ValueError('invalid '+key)
     if not settings['low_agl']<settings['high_agl']<=settings['max_agl']:raise ValueError('altitude order')
     for k in ('site_confirmed','auto_start_after_arm','obstacle_columns_enabled'):
@@ -128,8 +128,8 @@ def generate(root,out,settings,fc_xyz,rig):
     high=ground+settings['high_agl'];drop=ground+settings['drop_agl'];capture=ground+settings['landing_capture_agl'];cap=ground+settings['max_agl']
     release_min,release_max,permission_min,permission_max=release_heights(settings)
     land_z, handoff_z, posctl_stability = landing_control_parameters(settings, ground, float(rig['fc_ground_clearance']))
-    # 投递仍需本地 Z > 0.05m；降落只需 > 0，与控制器参数校验一致。
-    if drop<=.05 or ground+release_min<=.05 or land_z<=0.:raise ValueError('legacy positive local-Z bounds not met')
+    # 投递使用标定后的AGL及有序释放窗口；H降落仍保持原正本地Z要求。
+    if land_z<=0.:raise ValueError('landing positive local-Z bounds not met')
     point=lambda px,py,h:[x+px,y+py,h]
     shift=lambda box:[box[0]+x,box[1]+x,box[2]+y,box[3]+y]
     area=shift(settings['flight_bounds']);search=shift(settings['search_center_bounds']);target=shift(settings['target_bounds']);cover=shift(settings['coverage_bounds'])

@@ -9,17 +9,20 @@ namespace patrol_control {
 // Dedicated horizontal gate for compensated delivery descent. No displacement,
 // height or vertical-speed gate; independent of final release and H landing.
 struct DropPreDescentStabilityConfig {
-    double xy_tolerance_m = 0.04;
+    double xy_tolerance_m = 0.06;
     double max_horizontal_speed_mps = 0.10;
     double stable_duration_sec = 1.0;
     double max_odom_age_sec = 0.20;
     double max_sample_gap_sec = 0.20;
     std::size_t min_samples = 3;
 
-    bool valid() const {
-        const double values[] = {xy_tolerance_m, max_horizontal_speed_mps,
-            stable_duration_sec, max_odom_age_sec, max_sample_gap_sec};
+    bool valid(bool require_stability = true) const {
+        const double values[] = {xy_tolerance_m, max_odom_age_sec};
         for (double value : values)
+            if (!std::isfinite(value) || value <= 0.0) return false;
+        if (!require_stability) return true;
+        const double stability[] = {max_horizontal_speed_mps, stable_duration_sec, max_sample_gap_sec};
+        for (double value : stability)
             if (!std::isfinite(value) || value <= 0.0) return false;
         return min_samples >= 3;
     }

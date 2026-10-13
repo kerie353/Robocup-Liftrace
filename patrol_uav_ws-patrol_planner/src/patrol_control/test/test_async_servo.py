@@ -158,11 +158,20 @@ public:
     void servoAlignmentContextCallback(const uav_vision::AlignmentTargetContext::ConstPtr&);
     enum { Run_point, Aligning };
     int Drone_mode=Aligning;
-    ros::Time detection_start_time;
+    ros::Time detection_start_time, drop_alignment_started_;
     double waypoint_adjust_max_second_threshould=15;
     Pose mavros_point_cmd;
     Publisher mavros_point_cmd_pub;
     void timerPublicationPath();
+    // Transport-only fixture: existing H/raw branches stay inactive.
+    struct { int mode=1; } landing_descent_config_;
+    bool vertical_landing=false, zero_velocity_drop=false;
+    std::string external_landing_frame_="camera_init";
+    Publisher landing_vertical_cmd_pub_, drop_vertical_cmd_pub_;
+    bool externalLandingOffboardStateReady(ros::Time) const { return true; }
+    void externalLandingOffboardTick() {}
+    bool externalLandingOffboardDescentReady() const { return false; }
+    void publishExternalLandingOffboardSetpoint() {}
     bool control_ready=true;
     bool external_mission_mode_=true, external_landing_active_=false;
     bool external_landing_auto_land_requested_=false, external_landing_cancelled_=false;

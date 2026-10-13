@@ -1,7 +1,8 @@
 """Generate all local-Z parameters from one stationary FC reference."""
 from pathlib import Path
 import math,copy,json,yaml,struct
-from uav_mission.landing_posctl_config import validate_landing_posctl, landing_control_parameters, landing_descent_parameters
+from uav_mission.landing_posctl_config import validate_landing_posctl, landing_control_parameters, landing_descent_parameters, landing_alignment_mode
+from uav_mission.landing_offboard_config import landing_offboard_parameters
 from uav_mission.drop_height_config import release_heights
 
 TRIAL_FOLDERS = {
@@ -21,7 +22,7 @@ def apply_site_profile(settings, profile):
              'terminal_hover_agl','auto_start_after_arm','initialization_timeout','obstacle_columns_enabled',
              'bag_image_hz','bag_image_topic','record_inflated_cloud','record_map_clouds'}
     if settings['mode'] in H_MODES:
-        allowed.update(('landing_xy', 'landing_handoff_mode', 'landing_handoff_status_topic', 'landing_posctl', 'landing_alignment_mode', 'landing_descent_mode', 'landing_descent_speed_mps'))
+        allowed.update(('landing_xy', 'landing_handoff_mode', 'landing_handoff_status_topic', 'landing_posctl', 'landing_alignment_mode', 'landing_descent_mode', 'landing_descent_speed_mps', 'landing_offboard'))
     if settings.get('trial_kind') in ('corridor_landing','full_mission'):
         allowed.update(('corridor_waypoints','corridor_geometry'))
     if not isinstance(profile,dict) or set(profile)-allowed:
@@ -80,8 +81,9 @@ def flight_geometry(settings):
     return area
 
 def validate_settings(settings):
-    from uav_mission.drop_descent_config import drop_descent_parameters
+    from uav_mission.drop_descent_config import drop_descent_parameters, drop_horizontal_compensation_mode
     drop_descent_parameters(settings)
+    drop_horizontal_compensation_mode(settings)
     release_heights(settings)
     lead=settings.get('takeoff_z_lead_m',0.)
     if isinstance(lead,bool) or not isinstance(lead,(int,float)) or not math.isfinite(lead) or not (lead==0 or .4<=lead<=.6):
@@ -91,12 +93,12 @@ def validate_settings(settings):
         raise ValueError('Invalid motion_action_timeout; expected seconds in (0,600]')
     if settings.get('mode') not in ('visual_interrupt','low_multi',*HIGH_MODES,'landing'):
         raise ValueError('Unknown trial mode')
-    if settings.get('landing_handoff_mode', 'AUTO.LAND') not in ('AUTO.LAND', 'POSCTL'):
-        raise ValueError('landing_handoff_mode must be AUTO.LAND or POSCTL')
     if 'landing_handoff_mode' in settings and settings['mode'] not in H_MODES:
         raise ValueError('landing_handoff_mode only applies to visual H landing')
     if 'landing_posctl' in settings and settings['mode'] not in H_MODES:
         raise ValueError('landing_posctl only applies to visual H landing')
+    if 'landing_offboard' in settings and settings['mode'] not in H_MODES:
+        raise ValueError('landing_offboard only applies to visual H landing')
     if 'landing_alignment_mode' in settings and settings['mode'] not in H_MODES:
         raise ValueError('landing_alignment_mode only applies to visual H landing')
     if any(key in settings for key in ('landing_descent_mode', 'landing_descent_speed_mps')) and settings['mode'] not in H_MODES:
@@ -222,14 +224,8 @@ def generate(root,out,settings,fc_xyz,rig):
     if mode=='high_speed_capture':
         runtime['trial']['capture']=dict(speed=settings['cruise_speed'],lighting=settings.get('capture_lighting','unspecified'),
             route='flight_area.survey_xy',survey_xy=copy.deepcopy(area['survey_xy']))
-    runtime['following_speed_profile']=(dict(cruise_lead_m=min(float(settings['cruise_speed']),1.0),precision_lead_m=.4,corridor_lead_m=.15)
-        if mode=='high_speed_capture' else dict(cruise_lead_m=.50,precision_lead_m=.25,corridor_lead_m=.25))
-    if 'following_speed_profile' in settings:
-        runtime['following_speed_profile']=copy.deepcopy(settings['following_speed_profile'])
-    if settings.get('trial_kind') in ('corridor_landing','full_mission'):
-        # Without measured planes use the slow corridor lead; never assume wall geometry.
-        runtime['following_speed_profile']['precision_lead_m']=max(.4,runtime['following_speed_profile']['precision_lead_m'])
-        runtime['following_speed_profile']['corridor_lead_m']=.4
+    from uav_mission.navigation_following_config import navigation_following_profile
+    runtime['following_speed_profile']=navigation_following_profile(settings.get('following_speed_profile'))
     if mode=='landing':
         hx,hy=settings['landing_xy'];transit=ground+settings['landing_transit_agl']
         m.update(landing_xy=[x+hx,y+hy],return_altitude=capture,post_delivery_route=[point(max(.6,hx-.7),hy,transit),point(hx,hy,transit),point(hx,hy,capture)])
@@ -261,12 +257,13 @@ def generate(root,out,settings,fc_xyz,rig):
         ProbeConfig(**runtime['high_view_probe']['config'])
         SurveyPolicy(**runtime['high_view_full']['policy'])
     control=yaml.safe_load((root/'patrol_uav_ws-patrol_planner/src/uav_mission/config/vcl06_horizontal_control.yaml').read_text())
-    control.update(waypoints=[dict(x=x,y=y,z=(ground+settings['landing_transit_agl'] if mode=='landing' else low),yaw=0.,pointmode='Takeoff_point',hover_time=0.)],align_height=low,land_height=land_z,px4_max_distance=.25)
+    control.update(waypoints=[dict(x=x,y=y,z=(ground+settings['landing_transit_agl'] if mode=='landing' else low),yaw=0.,pointmode='Takeoff_point',hover_time=0.)],align_height=low,land_height=land_z,px4_max_distance=.6)
     control['takeoff_z_lead_m']=float(settings.get('takeoff_z_lead_m',0.))
     control['switch']['auto_land']=h_landing;control['drop_system'].update(enable_drop=drop_enabled,
         release_setpoint_height=drop,release_min_height=ground+release_min,height_threshold=ground+release_max)
-    from uav_mission.drop_descent_config import drop_descent_parameters
+    from uav_mission.drop_descent_config import drop_descent_parameters, drop_horizontal_compensation_mode
     control['drop_system']['descent'] = drop_descent_parameters(settings)
+    control['drop_system']['pre_descent']['mode'] = drop_horizontal_compensation_mode(settings)
     control['switch']['flag_landing_detect']=1 if h_landing else 0
     control['uav_vision'].update(recovery_height=low,
         standard_recovery_setpoint_height=low+.10,cross_recovery_setpoint_height=low+.10,
@@ -282,8 +279,9 @@ def generate(root,out,settings,fc_xyz,rig):
     control['external_landing'].update(frame='camera_init',capture_height=capture if h_landing else low,auto_land_height=handoff_z,detections_topic='/uav_vision/detections_mapped' if h_landing else '/board_trials/h_disabled',handoff_mode=settings.get('landing_handoff_mode', 'AUTO.LAND'),handoff_status_topic=settings.get('landing_handoff_status_topic', '/patrol_control/external_landing_handoff'))
     if posctl_stability is not None:
         control['external_landing']['posctl'] = posctl_stability
-    control['external_landing']['alignment_mode'] = settings.get('landing_alignment_mode', 'low')
+    control['external_landing']['alignment_mode'] = landing_alignment_mode(settings)
     control['external_landing']['descent'] = landing_descent_parameters(settings)
+    control['external_landing'].update(landing_offboard_parameters(settings, ground, float(rig['fc_ground_clearance'])))
     overrides={
         '/fast_planner_node/sdf_map/resolution':.10,'/fast_planner_node/sdf_map/map_size_x':area['map_size'][0],'/fast_planner_node/sdf_map/map_size_y':area['map_size'][1],'/fast_planner_node/sdf_map/map_size_z':area['map_size'][2],
         '/fast_planner_node/sdf_map/visualization_rate':2.,
@@ -298,10 +296,13 @@ def generate(root,out,settings,fc_xyz,rig):
         '/fast_planner_node/sdf_map/obstacles_inflation':.25,
         '/fast_planner_node/sdf_map/obstacles_inflation_up':.20,
         '/fast_planner_node/sdf_map/obstacles_inflation_down':.10,
-        '/traj_server/traj_server/target_dist':.25,
+        '/traj_server/traj_server/target_dist':.6,
         '/external_planner_start_max_distance':(max(.75,min(float(settings['cruise_speed']),1.0)+.25) if mode=='high_speed_capture' else .75),
         '/external_planner_max_command_z':ground+settings.get('max_agl',2.9),'/navigation/planner_bridge/execution/max_goal_z':ground+settings.get('max_agl',2.9),
         '/navigation/planner_bridge/execution/arrival_position_tolerance':.12,'/navigation/planner_bridge/execution/arrival_dwell':.8,
+        # Clear a previous module 08 whitelist when reusing the ROS parameter server.
+        '/navigation/planner_bridge/execution/position_only_arrival_goals':[],
+        '/navigation/planner_bridge/execution/position_only_arrival_dwell':.3,
         '/navigation/planner_bridge/execution/initial_plan_timeout':12.,
         '/navigation/planner_bridge/execution/search_initial_plan_timeout':12.,
         '/fast_planner_node/fsm/liveness_enabled':True,'/fast_planner_node/fsm/server_hold_replan_enabled':True,
@@ -324,19 +325,26 @@ def generate(root,out,settings,fc_xyz,rig):
         overrides['/fast_planner_node/'+namespace+'/'+velocity]=float(settings['cruise_speed'])
         overrides['/fast_planner_node/'+namespace+'/'+acceleration]=float(settings['cruise_acceleration'])
     if settings.get('speed_profile')=='competition':
-        # Same initial precision lead and planner-start gate as the F competition entry.
-        # SEARCH/APPROACH/boundary/corridor distances are selected by runtime afterwards.
-        overrides['/traj_server/traj_server/target_dist']=.4
+        # Preserve the competition first-command admission distance.
         overrides['/external_planner_start_max_distance']=1.2
-        control['px4_max_distance']=.4
     # application.launch loads overrides last, after the parent controller's defaults.
     overrides['/px4_max_distance']=control['px4_max_distance']
     overrides['/takeoff_z_lead_m']=control['takeoff_z_lead_m']
+    if settings.get('landing_handoff_mode') == 'OFFBOARD':
+        overrides['/navigation_frame_adapter/landing_touchdown_setpoint_topic'] = control['external_landing']['offboard_setpoint_topic']
     from uav_mission.navigation_recovery_config import recovery_parameters
     # Trials declare recovery off explicitly, including residual ROS-master parameters.
     overrides.update(recovery_parameters({},ground))
     from trial_motion import apply_generated_motion
     motion_report=apply_generated_motion(runtime,control,overrides,settings,ground)
+    if settings.get('trial_kind') == 'full_mission':
+        # Module 08 fixed survey/staging/post-delivery goals only. Dynamic revisit,
+        # APPROACH, recovery and landing handoff keep their existing conditions.
+        ordinary_goals=[point(*area['staging_xy'],low),point(*area['staging_xy'],high)]
+        ordinary_goals.extend(point(a,b,high) for a,b in area['survey_xy'])
+        ordinary_goals.extend(copy.deepcopy(runtime['mission']['post_delivery_route']))
+        overrides['/navigation/planner_bridge/execution/position_only_arrival_goals']=ordinary_goals
+        overrides['/navigation/planner_bridge/execution/position_only_arrival_dwell']=.3
     (out/'motion_profile.json').write_text(json.dumps(motion_report,indent=2))
     (out/'terminal_hover.yaml').write_text(yaml.safe_dump(dict(frame='camera_init',ground_z=ground,hover_agl=settings.get('terminal_hover_agl',.3),max_agl=settings.get('max_agl',2.9),descent_speed=.15)))
     for name,data in [('runtime.yaml',runtime),('control.yaml',control),('overrides.yaml',overrides),('auto_land.yaml',dict(frame='camera_init',landing_xy=[x+.6,y],cruise_z=low,route_revision='board-'+mode))]:

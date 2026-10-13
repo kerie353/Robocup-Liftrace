@@ -1,7 +1,7 @@
 # H 降落三种下降模式
 
 本次取代前一版高位对准后默认忽略 XY 位置/速度、发送零水平加速度的下降策略。
-`landing_alignment_mode: low/high` 只选择锁定 H 之前的视觉对准条件；
+`landing_alignment_mode: non_vh/vh` 只选择锁定 H 之前的视觉对准条件；
 `landing_descent_mode: 1/2/3` 独立选择锁定之后的下降策略，默认 1。
 
 | 模式 | 水平控制 | 高度控制 |
@@ -26,7 +26,7 @@
 试飞 03/04/08 或正式比赛场地 YAML：
 
 ```yaml
-landing_alignment_mode: high  # low/high，保留原先两种对准条件
+landing_alignment_mode: vh  # non_vh/vh，保留原先两种对准条件
 landing_descent_mode: 2       # 1/2/3
 landing_descent_speed_mps: 0.20  # 只影响模式2/3
 landing_handoff_mode: POSCTL
@@ -34,7 +34,9 @@ landing_handoff_mode: POSCTL
 
 板端 `run_trial.py` 支持 `--landing-descent-mode 2 --landing-descent-speed-mps 0.20`。
 两套生成器写入 `external_landing/descent/{mode,speed_mps,max_step_dt_sec}`。
-开关必须重新生成配置才生效；低位默认仍为模式 1，投递使用自己的 `drop_descent_mode`。
+开关必须重新生成配置才生效；08 全任务当前为 `vh` + 下降模式 2，投递使用自己的 `drop_descent_mode`。
+
+2026-10-13 对准模式更名：`non_vh` 对应原 `low`，`vh` 对应原 `high`。旧配置仍兼容读取，生成的控制参数统一使用新名称；其他场地模板保留原行为，仅同步名称。
 
 ## 验证与边界
 

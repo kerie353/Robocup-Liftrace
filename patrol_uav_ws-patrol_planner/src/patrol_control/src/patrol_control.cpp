@@ -146,6 +146,7 @@ LLController::~LLController(){
     near_wall_align_refresh_timer_.stop();
     cmd_timer.stop();
     async_servo_.shutdown();
+    external_landing_disarm_worker_.cancel();
 }
 
 
@@ -225,6 +226,9 @@ void LLController::initializeNode() {
     drop_vertical_cmd_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(
         nh_.param<std::string>("drop_system/descent/zero_velocity_setpoint_topic",
             "/navigation/drop_setpoint_vertical"), 1);
+    drop_velocity_cmd_pub_ = nh_.advertise<mavros_msgs::PositionTarget>(
+        nh_.param<std::string>("drop_system/descent/velocity_setpoint_topic",
+            "/navigation/drop_setpoint_velocity"), 1);
     if (!external_mission_mode_) {
         detect_sub_ = nh_.subscribe(
             "/detect/waypoint_mark_point", 1,
@@ -313,6 +317,15 @@ void LLController::initializeNode() {
     external_landing_state_sub_ = nh_.subscribe(
         external_landing_state_topic_, 10,
         &LLController::externalLandingStateCallback, this);
+    if (landing_descent_config_.mode == 4) {
+        external_landing_offboard_setpoint_pub_ = nh_.advertise<mavros_msgs::PositionTarget>(
+            external_landing_offboard_setpoint_topic_, 1);
+        external_landing_extended_state_sub_ = nh_.subscribe(
+            external_landing_extended_state_topic_, 10,
+            &LLController::externalLandingExtendedStateCallback, this);
+        external_landing_disarm_client_ = nh_.serviceClient<mavros_msgs::CommandBool>(
+            external_landing_disarm_service_);
+    }
 
     // 订阅对准反馈话题（从 alignment_control_converter 获取像素偏差）
     // alignment_feedback_sub_ = nh_.subscribe("/detect/pixel_offset", 1, &LLController::alignmentFeedbackCallback, this);
@@ -538,9 +551,129 @@ bool LLController::externalLandingControlReady(const ros::Time& now) const {
     }
     const double source_age = (now - state.header.stamp).toSec();
     const double receipt_age = (now - external_landing_state_receipt_).toSec();
+    const double max_age = landing_descent_config_.mode == 4 && external_landing_active_ && Drone_mode == Land
+        ? offboard_landing_config_.state_max_age : external_landing_state_max_age_sec_;
     return source_age >= 0.0 && receipt_age >= 0.0 &&
-           source_age <= external_landing_state_max_age_sec_ &&
-           receipt_age <= external_landing_state_max_age_sec_;
+           source_age <= max_age && receipt_age <= max_age;
+}
+
+bool LLController::externalLandingOffboardStateReady(const ros::Time& now) const {
+    const auto& state = external_landing_mavros_state_;
+    const bool expected_disarm = !state.armed && external_landing_auto_land_requested_ &&
+        external_landing_handoff_requested_at_ < state.header.stamp;
+    return state.connected && ((state.armed && state.mode == "OFFBOARD") || expected_disarm) &&
+        freshLandingStamp(now.toSec(), state.header.stamp.toSec(),
+                          external_landing_state_receipt_.toSec(),
+                          offboard_landing_config_.state_max_age);
+}
+
+void LLController::externalLandingExtendedStateCallback(
+    const mavros_msgs::ExtendedState::ConstPtr& msg) {
+    if (!external_mission_mode_ || !external_landing_active_ ||
+        landing_descent_config_.mode != 4) return;
+    const double now = ros::Time::now().toSec();
+    offboard_ground_confirmation_.observe(now, msg->header.stamp.toSec(), now,
+        msg->landed_state == mavros_msgs::ExtendedState::LANDED_STATE_IN_AIR,
+        msg->landed_state == mavros_msgs::ExtendedState::LANDED_STATE_ON_GROUND,
+        offboard_landing_config_);
+    if (!offboard_ground_confirmation_.confirmed(now, offboard_landing_config_))
+        external_landing_disarm_worker_.cancel();
+}
+
+void LLController::externalLandingOffboardTick() {
+    const ros::Time now = ros::Time::now();
+    if (!externalLandingOffboardStateReady(now)) {
+        failExternalLanding("offboard_state_not_ready_or_stale");
+        external_landing_cancelled_ = true;
+        return;
+    }
+    const bool ground = offboard_ground_confirmation_.confirmed(now.toSec(), offboard_landing_config_);
+    if (!external_landing_mavros_state_.armed) {
+        // Cross-topic delivery can put fresh disarm before any ground message.
+        // Waiting is bounded and never authorizes a disarm RPC or completion.
+        if (!external_landing_auto_land_requested_ ||
+            external_landing_mavros_state_.header.stamp <= external_landing_handoff_requested_at_) {
+            failExternalLanding("offboard_unexpected_disarm");
+            external_landing_cancelled_ = true;
+            return;
+        }
+        external_landing_disarm_worker_.cancel();
+        if (external_landing_disarmed_pending_at_.isZero()) external_landing_disarmed_pending_at_ = now;
+        if (ground && !external_landing_handoff_observed_) {
+            external_landing_handoff_observed_ = true;
+            publishExternalLandingHandoff("OBSERVED");
+        } else if (!ground && !external_landing_handoff_observed_ &&
+                   (now - external_landing_disarmed_pending_at_).toSec() > offboard_landing_config_.state_max_age) {
+            failExternalLanding("offboard_disarm_without_confirmed_ground");
+            external_landing_cancelled_ = true;
+            return;
+        }
+    } else if (external_landing_handoff_observed_ || !external_landing_disarmed_pending_at_.isZero()) {
+        failExternalLanding("offboard_rearmed_after_landing");
+        external_landing_cancelled_ = true;
+        return;
+    }
+    // Completion keeps LAND/identity/frozen anchor alive for the bridge.
+    if (external_landing_handoff_observed_) return;
+    if ((now - external_landing_started_at_).toSec() > external_landing_watchdog_timeout_sec_) {
+        failExternalLanding("controller_landing_watchdog_timeout");
+        external_landing_cancelled_ = true;
+        return;
+    }
+    if (!external_landing_alignment_complete_ || !external_landing_auto_land_requested_) return;
+    patrol_cmd = external_landing_aligned_goal_;
+    patrol_cmd.pose.position.z = uav_pose.pose.position.z;
+    Eigen::Vector3d velocity, angular;
+    if (!ground || !freshMotion(&velocity, &angular)) {
+        external_landing_disarm_worker_.cancel();
+        return;
+    }
+    if (!external_landing_mavros_state_.armed) return;
+    if (external_landing_last_disarm_attempt_.isZero() ||
+        (now - external_landing_last_disarm_attempt_).toSec() >= offboard_landing_config_.disarm_retry) {
+        auto client = external_landing_disarm_client_;
+        if (external_landing_disarm_worker_.submit([client]() mutable {
+                mavros_msgs::CommandBool disarm;
+                disarm.request.value = false; // Ordinary disarm; never force.
+                client.call(disarm); // Service success is not observed disarm.
+            })) external_landing_last_disarm_attempt_ = now;
+    }
+}
+
+bool LLController::externalLandingOffboardDescentReady() {
+    if (!external_mission_mode_ || Drone_mode != Land || landing_descent_config_.mode != 4 ||
+        !external_landing_active_ || external_landing_cancelled_ ||
+        !external_landing_alignment_complete_ || !external_landing_auto_land_requested_ ||
+        external_landing_handoff_observed_ || !external_landing_last_disarm_attempt_.isZero() ||
+        !externalLandingControlReady(ros::Time::now())) return false;
+    Eigen::Vector3d velocity, angular;
+    if (!freshMotion(&velocity, &angular)) return false;
+    const double z = motion_odom_.pose.pose.position.z;
+    if (!std::isfinite(z)) return false;
+    if (z <= offboard_landing_config_.endpoint()) external_landing_offboard_floor_reached_ = true;
+    const double now = ros::Time::now().toSec();
+    return !external_landing_offboard_floor_reached_ &&
+        offboard_ground_confirmation_.fresh(now, offboard_landing_config_) &&
+        !offboard_ground_confirmation_.confirmed(now, offboard_landing_config_);
+}
+
+void LLController::publishExternalLandingOffboardSetpoint() {
+    mavros_msgs::PositionTarget command;
+    command.header.stamp = ros::Time::now();
+    command.header.frame_id = external_landing_frame_;
+    command.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
+    // Mission-frame ENU values: the sole frame adapter performs ENU/NED and
+    // mission/local conversion before MAVROS. Z position is TF anchor only.
+    command.type_mask = mavros_msgs::PositionTarget::IGNORE_PZ |
+        mavros_msgs::PositionTarget::IGNORE_VX | mavros_msgs::PositionTarget::IGNORE_VY |
+        mavros_msgs::PositionTarget::IGNORE_AFX | mavros_msgs::PositionTarget::IGNORE_AFY |
+        mavros_msgs::PositionTarget::IGNORE_AFZ | mavros_msgs::PositionTarget::IGNORE_YAW_RATE;
+    command.position.x = external_landing_aligned_goal_.pose.position.x;
+    command.position.y = external_landing_aligned_goal_.pose.position.y;
+    command.position.z = motion_odom_.pose.pose.position.z;
+    command.velocity.z = -offboard_landing_config_.descent_speed;
+    command.yaw = tf::getYaw(mavros_point_cmd.pose.orientation);
+    external_landing_offboard_setpoint_pub_.publish(command);
 }
 
 void LLController::publishExternalLandingHandoff(const std::string& stage) {
@@ -575,6 +708,16 @@ void LLController::externalLandingStateCallback(
         cancelDropAction();
     }
     if (!external_mission_mode_ || !external_landing_active_) {
+        return;
+    }
+    if (landing_descent_config_.mode == 4) {
+        // Mode/connection changes must latch even between setpoint ticks.
+        if (!externalLandingOffboardStateReady(ros::Time::now())) {
+            failExternalLanding("offboard_control_lost");
+            external_landing_cancelled_ = true;
+        } else if (!msg->armed || external_landing_handoff_observed_) {
+            externalLandingOffboardTick();
+        }
         return;
     }
     // Only our sent request authorizes the expected handoff transition.
@@ -624,7 +767,14 @@ void LLController::externalLandingStateCallback(
 }
 
 void LLController::clearExternalLandingState(bool disable_detector) {
-    if (external_landing_active_) publishExternalLandingHandoff("CANCELLED");
+    if (external_landing_active_ &&
+        !(landing_descent_config_.mode == 4 && external_landing_handoff_observed_))
+        publishExternalLandingHandoff("CANCELLED");
+    external_landing_disarm_worker_.cancel();
+    offboard_ground_confirmation_.reset();
+    external_landing_last_disarm_attempt_ = ros::Time(0);
+    external_landing_disarmed_pending_at_ = ros::Time(0);
+    external_landing_offboard_floor_reached_ = false;
     external_landing_active_ = false;
     external_landing_new_mark_ = false;
     external_landing_alignment_complete_ = false;
@@ -683,6 +833,11 @@ void LLController::externalLandingTick() {
     }
 
     const ros::Time now = ros::Time::now();
+    if (landing_descent_config_.mode == 4) {
+        externalLandingOffboardTick();
+        if (!external_landing_active_ || external_landing_handoff_observed_ ||
+            !external_landing_mavros_state_.armed || external_landing_auto_land_requested_) return;
+    }
     const auto& state = external_landing_mavros_state_;
     const double source_age = (now - state.header.stamp).toSec();
     const double receipt_age = (now - external_landing_state_receipt_).toSec();
@@ -763,7 +918,7 @@ void LLController::externalLandingTick() {
         landing_high_alignment_window_.reset();
     }
 
-    const bool high_mode = external_landing_alignment_mode_ == "high";
+    const bool high_mode = external_landing_alignment_mode_ == "vh";
     const bool high_ready = high_mode && !external_landing_alignment_complete_ &&
         highLandingAlignmentReady();
     // Low acquisition retains ten fresh aligned frames. High acquisition uses
@@ -809,7 +964,8 @@ void LLController::externalLandingTick() {
     adjust_target_position[0] = target.pose.position.x;
     adjust_target_position[1] = target.pose.position.y;
     adjust_target_position[2] = external_landing_alignment_complete_
-        ? land_height : external_landing_capture_height_;
+        ? (landing_descent_config_.mode == 4 ? uav_pose.pose.position.z : land_height)
+        : external_landing_capture_height_;
     adjust_target_position[3] =
         tf::getYaw(external_landing_goal_.pose.orientation);
     patrol_cmd.header.frame_id = external_landing_frame_;
@@ -823,6 +979,18 @@ void LLController::externalLandingTick() {
             1.0,
             "[ExternalLanding] waiting for fresh H alignment %d/%d",
             external_landing_stable_count_, external_landing_stable_frames_);
+        return;
+    }
+
+    if (landing_descent_config_.mode == 4) {
+        // Initiate the H-only direct descent, without POSCTL altitude/settle gates.
+        // The raw vertical-velocity lane starts only with fresh odometry.
+        Eigen::Vector3d velocity, angular;
+        if (auto_land && freshMotion(&velocity, &angular) && externalLandingControlReady(now)) {
+            external_landing_auto_land_requested_ = true;
+            external_landing_handoff_requested_at_ = now;
+            publishExternalLandingHandoff("REQUESTED");
+        }
         return;
     }
 
@@ -1711,6 +1879,8 @@ void LLController::cmdCallback(const ros::TimerEvent& event) {
         external_mission_mode_ && Drone_mode == Aligning && drop_descent_started_ && !drop_complete;
     bool independent_drop = pending_independent_drop && dropDescentControlActive();
     bool zero_velocity_drop = independent_drop && drop_descent_config_.mode == 3;
+    bool vertical_speed_drop = false;
+    double drop_vz_command = 0.0;
     if (pending_independent_drop && !independent_drop) {
         drop_descent_profile_.pause(ros::Time::now().toSec());
         mavros_point_cmd = uav_pose; // Revoked transaction restores the existing position hold lane.
@@ -1726,9 +1896,18 @@ void LLController::cmdCallback(const ros::TimerEvent& event) {
     if (independent_drop) {
         Eigen::Vector3d velocity, angular;
         const double now = ros::Time::now().toSec();
-        if (freshMotion(&velocity, &angular) && externalLandingControlReady(ros::Time::now()))
-            mavros_point_cmd.pose.position.z = drop_descent_profile_.update(now);
-        else {
+        if (freshMotion(&velocity, &angular) && externalLandingControlReady(ros::Time::now())) {
+            if (drop_descent_config_.mode == 4) {
+                drop_vz_command = drop_descent_profile_.updateVelocity(
+                    now, motion_odom_.pose.pose.position.z, velocity.z());
+                vertical_speed_drop = !drop_descent_profile_.holding();
+                mavros_point_cmd.pose.position.z = drop_descent_profile_.height();
+                ROS_INFO_THROTTLE(1.0,
+                    "[DropDescent4] z=%.3f target=%.3f measured_vz=%.3f command_vz=%.3f hold=%d",
+                    motion_odom_.pose.pose.position.z, drop_release_setpoint_height_,
+                    velocity.z(), drop_vz_command, drop_descent_profile_.holding());
+            } else mavros_point_cmd.pose.position.z = drop_descent_profile_.update(now);
+        } else {
             drop_descent_profile_.pause(now);
             mavros_point_cmd.pose.position.z = drop_descent_profile_.height();
         }
@@ -1745,7 +1924,11 @@ void LLController::cmdCallback(const ros::TimerEvent& event) {
     if (independent_landing) {
         const double now = ros::Time::now().toSec();
         Eigen::Vector3d velocity, angular;
-        if (external_landing_auto_land_requested_) {
+        if (landing_descent_config_.mode == 4) {
+            // Raw mode owns VZ only while feedback permits descent. Every other
+            // state uses the original position lane at the measured height.
+            mavros_point_cmd.pose.position.z = uav_pose.pose.position.z;
+        } else if (external_landing_auto_land_requested_) {
             // Preserve the existing handoff hold height while POSCTL is pending.
             landing_descent_profile_.pause(now);
         } else if (freshMotion(&velocity, &angular) && externalLandingControlReady(ros::Time::now())) {
@@ -1863,11 +2046,25 @@ void LLController::cmdCallback(const ros::TimerEvent& event) {
 
     mavros_point_cmd.header.stamp = ros::Time::now();
     mavros_point_cmd.header.frame_id = "camera_init";
-    if (vertical_landing) {
+    if (externalLandingOffboardDescentReady()) {
+        publishExternalLandingOffboardSetpoint();
+    } else if (vertical_landing) {
         mavros_point_cmd.header.frame_id = external_landing_frame_;
         landing_vertical_cmd_pub_.publish(mavros_point_cmd);
     } else if (zero_velocity_drop) {
         drop_vertical_cmd_pub_.publish(mavros_point_cmd);
+    } else if (vertical_speed_drop) {
+        mavros_msgs::PositionTarget raw;
+        raw.header = mavros_point_cmd.header;
+        raw.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
+        raw.type_mask = mavros_msgs::PositionTarget::IGNORE_PZ |
+            mavros_msgs::PositionTarget::IGNORE_VX | mavros_msgs::PositionTarget::IGNORE_VY |
+            mavros_msgs::PositionTarget::IGNORE_AFX | mavros_msgs::PositionTarget::IGNORE_AFY |
+            mavros_msgs::PositionTarget::IGNORE_AFZ | mavros_msgs::PositionTarget::IGNORE_YAW_RATE;
+        raw.position = mavros_point_cmd.pose.position;
+        raw.velocity.z = drop_vz_command;
+        raw.yaw = tf::getYaw(mavros_point_cmd.pose.orientation);
+        drop_velocity_cmd_pub_.publish(raw);
     } else {
         mavros_point_cmd_pub.publish(mavros_point_cmd);
     }
@@ -1906,6 +2103,7 @@ void LLController::Lock() {
 }
 
 void LLController::CallLand() {
+    if (external_mission_mode_ && landing_descent_config_.mode == 4) return;
     if (external_mission_mode_ &&
         (!auto_land || !external_landing_active_ || external_landing_cancelled_ ||
          external_landing_auto_land_requested_ ||
@@ -1998,13 +2196,17 @@ void LLController::load_params() {
     drop_settle_config_.max_vertical_speed_mps = 0.10;
     drop_settle_config_.stable_duration_sec = 0.30;
     // Shared release config keeps legacy XY gates when height-only is disabled.
-    // Pre-descent horizontal stability has its own independent config.
+    // Pre-descent XY correction has its own independent class thresholds.
     load_stability("drop_system/settle", &drop_settle_config_);
     drop_compensate_before_descent_ = nh_.param("drop_system/compensate_before_descent", true);
     drop_release_height_only_ = nh_.param("drop_system/release_height_only", true);
     drop_descent_config_.mode = nh_.param("drop_system/descent/mode", 1);
     drop_descent_config_.speed_mps = nh_.param("drop_system/descent/speed_mps", 0.20);
     drop_descent_config_.max_step_dt_sec = nh_.param("drop_system/descent/max_step_dt_sec", 0.20);
+    drop_descent_config_.velocity_speed_mps = nh_.param("drop_system/descent/velocity_speed_mps", 0.60);
+    drop_descent_config_.acceleration_mps2 = nh_.param("drop_system/descent/acceleration_mps2", 0.60);
+    drop_descent_config_.braking_mps2 = nh_.param("drop_system/descent/braking_mps2", 0.60);
+    drop_descent_config_.hold_tolerance_m = nh_.param("drop_system/descent/hold_tolerance_m", 0.015);
     if (!drop_descent_config_.valid()) throw std::invalid_argument("invalid drop descent configuration");
     drop_descent_profile_ = DropDescentProfile(drop_descent_config_);
     drop_red_cross_xy_tolerance_m_ = nh_.param(
@@ -2012,16 +2214,29 @@ void LLController::load_params() {
     if (!std::isfinite(drop_red_cross_xy_tolerance_m_) || drop_red_cross_xy_tolerance_m_ <= 0.0)
         throw std::invalid_argument("invalid red cross drop XY tolerance");
     const std::string pre_descent_root = "drop_system/pre_descent";
-    drop_pre_descent_config_.xy_tolerance_m = nh_.param(pre_descent_root + "/xy_tolerance_m", 0.04);
+    drop_horizontal_compensation_mode_ = nh_.param(pre_descent_root + "/mode", 2);
+    drop_pre_descent_stable_xy_tolerance_m_ = nh_.param(pre_descent_root + "/stable_xy_tolerance_m", 0.04);
+    if ((drop_horizontal_compensation_mode_ != 1 && drop_horizontal_compensation_mode_ != 2) ||
+        !std::isfinite(drop_pre_descent_stable_xy_tolerance_m_) || drop_pre_descent_stable_xy_tolerance_m_ <= 0.0)
+        throw std::invalid_argument("invalid horizontal compensation mode or stable XY tolerance");
+    drop_pre_descent_config_.xy_tolerance_m = nh_.param(pre_descent_root + "/xy_tolerance_m", 0.06);
+    drop_pre_descent_red_cross_xy_tolerance_m_ = nh_.param(
+        pre_descent_root + "/red_cross_xy_tolerance_m", 0.04);
+    if (!std::isfinite(drop_pre_descent_red_cross_xy_tolerance_m_) ||
+        drop_pre_descent_red_cross_xy_tolerance_m_ <= 0.0)
+        throw std::invalid_argument("invalid red cross pre-descent XY tolerance");
+    // Keep old parameter names readable, without speed/duration/sample gates.
     drop_pre_descent_config_.max_horizontal_speed_mps = nh_.param(pre_descent_root + "/max_horizontal_speed_mps", 0.10);
     drop_pre_descent_config_.stable_duration_sec = nh_.param(pre_descent_root + "/stable_duration_sec", 1.0);
     drop_pre_descent_config_.max_odom_age_sec = nh_.param(pre_descent_root + "/max_odom_age_sec", 0.20);
     drop_pre_descent_config_.max_sample_gap_sec = nh_.param(pre_descent_root + "/max_sample_gap_sec", 0.20);
     const int pre_descent_samples = nh_.param(pre_descent_root + "/min_samples", 3);
-    if (pre_descent_samples < 3) throw std::invalid_argument("pre-descent requires distinct samples");
-    drop_pre_descent_config_.min_samples = pre_descent_samples;
-    if (!drop_pre_descent_config_.valid()) throw std::invalid_argument("invalid pre-descent configuration");
-    drop_pre_descent_window_ = DropPreDescentStabilityWindow(drop_pre_descent_config_);
+    drop_pre_descent_config_.min_samples = std::max(0, pre_descent_samples);
+    if (!drop_pre_descent_config_.valid(drop_horizontal_compensation_mode_ == 1))
+        throw std::invalid_argument("invalid pre-descent configuration");
+    auto stable_config = drop_pre_descent_config_;
+    stable_config.xy_tolerance_m = drop_pre_descent_stable_xy_tolerance_m_;
+    drop_pre_descent_window_ = DropPreDescentStabilityWindow(stable_config);
     landing_settle_config_.height_tolerance_m = 0.05;
     landing_settle_config_.max_horizontal_speed_mps = 0.10;
     landing_settle_config_.max_vertical_speed_mps = 0.10;
@@ -2137,15 +2352,40 @@ void LLController::load_params() {
     external_landing_handoff_mode_ = nh_.param<std::string>(
         "external_landing/handoff_mode", "AUTO.LAND");
     external_landing_alignment_mode_ = nh_.param<std::string>(
-        "external_landing/alignment_mode", "low");
+        "external_landing/alignment_mode", "non_vh");
+    if (external_landing_alignment_mode_ == "low") external_landing_alignment_mode_ = "non_vh";
+    else if (external_landing_alignment_mode_ == "high") external_landing_alignment_mode_ = "vh";
     landing_descent_config_.mode = nh_.param("external_landing/descent/mode", 1);
     landing_descent_config_.speed_mps = nh_.param("external_landing/descent/speed_mps", 0.20);
     landing_descent_config_.max_step_dt_sec = nh_.param("external_landing/descent/max_step_dt_sec", 0.20);
-    if (!landing_descent_config_.valid()) throw std::invalid_argument("invalid H descent configuration");
-    landing_descent_profile_ = DropDescentProfile(landing_descent_config_);
-    if ((external_landing_alignment_mode_ != "low" && external_landing_alignment_mode_ != "high") ||
-        (external_landing_alignment_mode_ == "high" && external_landing_handoff_mode_ != "POSCTL"))
-        throw std::invalid_argument("H alignment_mode must be low/high; high requires POSCTL");
+    offboard_landing_config_.ground_z = nh_.param("external_landing/offboard_ground_z", -0.22);
+    offboard_landing_config_.fc_clearance = nh_.param("external_landing/offboard_fc_clearance", 0.22);
+    offboard_landing_config_.descent_speed = nh_.param("external_landing/offboard_descent_speed", 0.30);
+    offboard_landing_config_.touchdown_overtravel = nh_.param("external_landing/offboard_touchdown_overtravel", 0.04);
+    offboard_landing_config_.ground_confirm_duration = nh_.param("external_landing/offboard_ground_confirm_duration", 0.3);
+    offboard_landing_config_.state_max_age = nh_.param("external_landing/offboard_state_max_age", 2.5);
+    offboard_landing_config_.disarm_retry = nh_.param("external_landing/offboard_disarm_retry", 1.0);
+    external_landing_extended_state_topic_ = nh_.param<std::string>(
+        "external_landing/extended_state_topic", "/mavros/extended_state");
+    external_landing_disarm_service_ = nh_.param<std::string>(
+        "external_landing/offboard_disarm_service", "/mavros/cmd/arming");
+    external_landing_offboard_setpoint_topic_ = nh_.param<std::string>(
+        "external_landing/offboard_setpoint_topic", "/navigation/landing_setpoint_touchdown");
+    if (!validLandingDescent(landing_descent_config_, external_landing_handoff_mode_) ||
+        (landing_descent_config_.mode == 4 &&
+         (!nh_.hasParam("external_landing/offboard_ground_z") ||
+          !nh_.hasParam("external_landing/offboard_fc_clearance") ||
+          !offboard_landing_config_.valid() || external_landing_extended_state_topic_.empty() ||
+          external_landing_disarm_service_.empty() || external_landing_offboard_setpoint_topic_.empty() ||
+          offboard_landing_config_.endpoint() >= land_height)))
+        throw std::invalid_argument("invalid H descent: mode 4 requires OFFBOARD and bounded touchdown below staging");
+    auto landing_ramp_config = landing_descent_config_;
+    if (landing_ramp_config.mode != 4)
+        landing_descent_profile_ = DropDescentProfile(landing_ramp_config); // Existing modes 1/2/3 only.
+    if ((external_landing_alignment_mode_ != "non_vh" && external_landing_alignment_mode_ != "vh") ||
+        (external_landing_alignment_mode_ == "vh" && external_landing_handoff_mode_ != "POSCTL" &&
+         external_landing_handoff_mode_ != "OFFBOARD"))
+        throw std::invalid_argument("H alignment_mode must be non_vh/vh; vh requires POSCTL or direct OFFBOARD");
     external_landing_handoff_topic_ = nh_.param<std::string>(
         "external_landing/handoff_status_topic", "/patrol_control/external_landing_handoff");
     external_landing_mode_transition_timeout_sec_ = nh_.param(
@@ -2161,7 +2401,8 @@ void LLController::load_params() {
         !std::isfinite(external_landing_mode_transition_timeout_sec_) ||
         external_landing_mode_transition_timeout_sec_ <= 0.0 ||
         (external_landing_handoff_mode_ != "AUTO.LAND" &&
-         external_landing_handoff_mode_ != "POSCTL") ||
+         external_landing_handoff_mode_ != "POSCTL" &&
+         external_landing_handoff_mode_ != "OFFBOARD") ||
         external_landing_frame_.empty() ||
         (external_mission_mode_ &&
          (external_landing_detections_topic_.empty() ||
@@ -2186,6 +2427,10 @@ void LLController::load_params() {
     drop_precision_threshold = nh_.param("drop_system/precision_threshold", 20.0);
     dynamic_height = nh_.param("dynamic/ranger_height", 0.20);
     drop_height_threshold = nh_.param("drop_system/height_threshold", 0.2);
+    drop_release_timeout_enabled_ = nh_.param("drop_system/release_timeout/enabled", true);
+    drop_release_timeout_sec_ = nh_.param("drop_system/release_timeout/after_sec", 20.0);
+    if (!std::isfinite(drop_release_timeout_sec_) || drop_release_timeout_sec_ <= 0.0)
+        throw std::invalid_argument("drop_system/release_timeout/after_sec must be finite and positive");
     drop_position_threshold_ = nh_.param(
         "drop_system/position_threshold", 0.15);
     servo_action_service_ = nh_.param<std::string>(
@@ -3548,6 +3793,9 @@ void LLController::missionCommandCallback(
             servo_alignment_target_id_ = msg->target_id;
             servo_alignment_target_class_ = msg->target_class;
             servo_alignment_stamp_ = msg->header.stamp;
+            // Start once per accepted ALIGN, never on context/permission heartbeats.
+            drop_alignment_started_ = drop_timeout_last_check_ = ros::Time::now();
+            drop_timeout_clock_invalid_ = false;
             // Recovery changes the working height; every new target starts
             // from the configured capture height, including the second/third.
             align_height = external_alignment_capture_height_;
@@ -3596,10 +3844,10 @@ void LLController::missionCommandCallback(
                     2.0, "[ExternalLanding] duplicate or cancelled LAND command ignored");
                 return;
             }
-            if (external_landing_handoff_mode_ == "POSCTL" &&
+            if ((external_landing_handoff_mode_ == "POSCTL" || landing_descent_config_.mode == 4) &&
                 (msg->target_class.empty() || msg->goal.header.seq == 0 ||
                  msg->goal.header.stamp.isZero())) {
-                ROS_ERROR("[ExternalLanding] POSCTL LAND rejected without mission/decision/command identity");
+                ROS_ERROR("[ExternalLanding] LAND rejected without mission/decision/command identity");
                 return;
             }
             resetDetectionState();
@@ -3644,6 +3892,10 @@ void LLController::missionCommandCallback(
             external_landing_handoff_hold_height_ = 0.0;
             external_landing_stable_count_ = 0;
             external_landing_started_at_ = ros::Time::now();
+            offboard_ground_confirmation_.reset(external_landing_started_at_.toSec());
+            external_landing_last_disarm_attempt_ = ros::Time(0);
+            external_landing_disarmed_pending_at_ = ros::Time(0);
+            external_landing_offboard_floor_reached_ = false;
             external_landing_command_stamp_ = external_landing_started_at_;
             external_landing_last_mark_stamp_ = ros::Time(0);
             external_landing_last_mark_receipt_ = ros::Time(0);
@@ -3835,19 +4087,39 @@ bool LLController::setCompensatedDropTarget(geometry_msgs::PoseStamped* target) 
     return true;
 }
 
-double LLController::compensatedDropXYTolerance() const {
+double LLController::compensatedDropXYTolerance(bool release) const {
+    if (!release && drop_horizontal_compensation_mode_ == 1)
+        return drop_pre_descent_stable_xy_tolerance_m_;
     // Only the bound mission class may select the standard-board tolerance.
     const auto& cls = compensated_context_.semantic_target_class;
     if (cls == "tent" || cls == "pillbox" || cls == "bridge" || cls == "panzer")
-        return drop_settle_config_.xy_tolerance_m;
-    if (cls == "red_cross") return drop_red_cross_xy_tolerance_m_;
+        return release ? drop_settle_config_.xy_tolerance_m : drop_pre_descent_config_.xy_tolerance_m;
+    const double cross_tolerance = release ? drop_red_cross_xy_tolerance_m_
+                                          : drop_pre_descent_red_cross_xy_tolerance_m_;
+    if (cls == "red_cross") return cross_tolerance;
     // Unsupported/unknown classes retain the old 4cm ceiling, even if the
     // configurable red-cross tolerance is raised. A tighter setting still wins.
-    return std::min(0.04, drop_red_cross_xy_tolerance_m_);
+    return std::min(0.04, cross_tolerance);
+}
+
+bool LLController::compensatedDropTimeoutReady() {
+    const ros::Time now = ros::Time::now();
+    // Countdown starts on the first successful descent transition, not ALIGN.
+    // No dependency on permission here: the arbiter consumes our fresh timeout
+    // feedback before granting the matching authorization.
+    if (!std::isfinite(now.toSec()) || (!drop_descent_started_at_.isZero() &&
+        (now - drop_timeout_last_check_).toSec() < 0.0)) drop_timeout_clock_invalid_ = true;
+    drop_timeout_last_check_ = now;
+    return drop_release_timeout_enabled_ && !drop_timeout_clock_invalid_ &&
+        !drop_descent_started_at_.isZero() &&
+        (now - drop_descent_started_at_).toSec() >= drop_release_timeout_sec_ &&
+        external_mission_mode_ && compensated_alignment_enabled_ &&
+        compensated_goal_frozen_ && drop_descent_started_;
 }
 
 bool LLController::compensatedDropSettled(bool release, double* error, double* speed,
                                       bool require_release_height) {
+    const bool timeout_fallback = compensatedDropTimeoutReady();
     auto& window = release ? drop_release_window_ : drop_capture_window_;
     const auto& c = servo_alignment_context_;
     const auto& b = compensated_context_;
@@ -3857,7 +4129,7 @@ bool LLController::compensatedDropSettled(bool release, double* error, double* s
         c.payload_slot == b.payload_slot && c.semantic_target_id == b.semantic_target_id &&
         c.semantic_target_first_seen == b.semantic_target_first_seen && c.semantic_target_class == b.semantic_target_class &&
         c.align_mode == b.align_mode && c.deadline > ros::Time::now();
-    if (!compensated_goal_valid_ || !bound || c.payload_slot < 1 || c.payload_slot > 3 ||
+    if (!compensated_goal_valid_ || compensated_target_outside_boundary_ || !bound || c.payload_slot < 1 || c.payload_slot > 3 ||
         Drone_mode != Aligning || (release && !compensated_goal_frozen_)) {
         window.reset(); drop_pre_descent_window_.reset(); return false;
     }
@@ -3892,32 +4164,42 @@ bool LLController::compensatedDropSettled(bool release, double* error, double* s
     if (!release && (source_age < 0.0 || source_age > drop_offset_timeout_)) {window.reset(); return false;}
     // Capture keeps visual identity/geometry/freshness, but does not wait for
     // release-level position, velocity, height or a motion stability window.
-    // Final release uses the current fresh motion sample without recapture.
-    // Pre-descent has a separate horizontal-only duration/sample window.
+    // Final release uses fresh motion without recapture. Pre-descent selects
+    // current XY or the separate XY/speed/duration window, never final geometry.
     if (!release) return externalLandingControlReady(ros::Time::now());
     if (!require_release_height) {
-        const auto result = drop_pre_descent_window_.update(now,
-            motion_odom_.header.stamp.toSec(), motion_odom_receipt_.toSec(),
-            xy_error, horizontal_speed, externalLandingControlReady(ros::Time::now()));
-        if (!result.ready) ROS_INFO_THROTTLE(1.0,
-            "[DropGeometry] pre_descent_wait reason=%s fc_xy_error=%.4f outlet_xy_error=%.4f "
-            "horizontal_speed=%.4f span=%.3f required=%.3f samples=%zu xy_tolerance=%.3f speed_limit=%.3f",
-            result.reason,fc_error,outlet_error,horizontal_speed,result.stable_for_sec,
-            drop_pre_descent_config_.stable_duration_sec,result.sample_count,
-            drop_pre_descent_config_.xy_tolerance_m,drop_pre_descent_config_.max_horizontal_speed_mps);
-        else ROS_INFO("[DropGeometry] pre_descent_ready slot=%u decision=%u span=%.3f samples=%zu "
-            "fc_xy_error=%.4f outlet_xy_error=%.4f horizontal_speed=%.4f",
-            c.payload_slot,c.decision_seq,result.stable_for_sec,result.sample_count,
-            fc_error,outlet_error,horizontal_speed);
-        return result.ready;
+        if (drop_horizontal_compensation_mode_ == 1) {
+            const auto result = drop_pre_descent_window_.update(now,
+                motion_odom_.header.stamp.toSec(), motion_odom_receipt_.toSec(),
+                xy_error, horizontal_speed, externalLandingControlReady(ros::Time::now()));
+            ROS_INFO_THROTTLE(1.0,
+                "[DropGeometry] pre_descent mode=1 reason=%s xy=%.4f speed=%.4f span=%.3f samples=%zu",
+                result.reason, xy_error, horizontal_speed, result.stable_for_sec, result.sample_count);
+            return result.ready;
+        }
+        const double xy_tolerance = compensatedDropXYTolerance(false);
+        const bool ready = std::isfinite(xy_error) && xy_error < xy_tolerance &&
+            now-motion_odom_.header.stamp.toSec() <= drop_pre_descent_config_.max_odom_age_sec &&
+            now-motion_odom_receipt_.toSec() <= drop_pre_descent_config_.max_odom_age_sec &&
+            externalLandingControlReady(ros::Time::now());
+        if (!ready) ROS_INFO_THROTTLE(1.0,
+            "[DropGeometry] pre_descent_wait fc_xy_error=%.4f outlet_xy_error=%.4f "
+            "horizontal_speed=%.4f xy_tolerance=%.3f class=%s",
+            fc_error,outlet_error,horizontal_speed,xy_tolerance,b.semantic_target_class.c_str());
+        else ROS_INFO("[DropGeometry] pre_descent_ready slot=%u decision=%u "
+            "fc_xy_error=%.4f outlet_xy_error=%.4f horizontal_speed=%.4f xy_tolerance=%.3f class=%s",
+            c.payload_slot,c.decision_seq,fc_error,outlet_error,horizontal_speed,
+            xy_tolerance,b.semantic_target_class.c_str());
+        return ready;
     }
     const double xy_tolerance = compensatedDropXYTolerance();
-    // Pre-descent XY/speed stability remains mandatory in serial mode.
-    // Once descending, height-only release ignores horizontal error magnitude;
-    // fresh feedback, bound context, flight-state and actuator permission stay.
+    const bool timeout_release = require_release_height && timeout_fallback;
+    // Independent pre-descent XY correction remains mandatory in serial mode.
+    // Normal height-only release ignores XY. After the descent timeout both
+    // XY and height are bypassed; fresh feedback, binding and flight state stay.
     const bool ready = std::isfinite(xy_error) && std::isfinite(horizontal_speed) &&
-        std::isfinite(pos.z) && (drop_release_height_only_ || xy_error < xy_tolerance) &&
-        (!require_release_height ||
+        std::isfinite(pos.z) && (drop_release_height_only_ || xy_error < xy_tolerance || timeout_release) &&
+        (timeout_release || !require_release_height ||
          (pos.z >= drop_release_min_height_ && pos.z <= drop_height_threshold)) &&
         externalLandingControlReady(ros::Time::now());
     if (!ready) ROS_INFO_THROTTLE(1.0,
@@ -3925,6 +4207,11 @@ bool LLController::compensatedDropSettled(bool release, double* error, double* s
         "xy_tolerance=%.3f class=%s release_xy_check=%s",
         xy_error,horizontal_speed,velocity.z(),pos.z,drop_release_min_height_,drop_height_threshold,
         xy_tolerance,b.semantic_target_class.c_str(),drop_release_height_only_ ? "disabled" : "enabled");
+    else if (timeout_release)
+        ROS_WARN_THROTTLE(1.0, "[DropTimeout] descent_timeout_release slot=%u decision=%u "
+            "descent_elapsed=%.3f xy=%.4f fc_z=%.4f; geometry bypass, matching permission required",
+            c.payload_slot, c.decision_seq, (ros::Time::now()-drop_descent_started_at_).toSec(),
+            xy_error,pos.z);
     else if (require_release_height) ROS_INFO(
         "[DropGeometry] release_ready slot=%u decision=%u fc_xy_error=%.4f outlet_xy_error=%.4f "
         "horizontal_speed=%.4f vz=%.4f fc_z=%.4f floor_z=%.4f ceiling_z=%.4f odom=%.6f "
@@ -3962,16 +4249,20 @@ double LLController::compensatedDropCommandHeight() {
             if (!drop_descent_profile_.start(initial_z, drop_release_setpoint_height_,
                                              ros::Time::now().toSec())) {
                 drop_descent_started_ = false;
+                drop_descent_started_at_ = ros::Time(0);
                 return external_alignment_capture_height_;
             }
         }
+        drop_descent_started_at_ = drop_timeout_last_check_ = ros::Time::now();
+        drop_timeout_clock_invalid_ = false;
         ROS_INFO("[DropGeometry] descent_mode=%d z_speed=%.3f z_initial=%.4f",
-            drop_descent_config_.mode,drop_descent_config_.speed_mps,
+            drop_descent_config_.mode,drop_descent_config_.mode == 4
+                ? drop_descent_config_.velocity_speed_mps : drop_descent_config_.speed_mps,
             drop_descent_config_.mode == 1 ? uav_pose.pose.position.z : drop_descent_profile_.height());
         ROS_INFO("[DropGeometry] descent_started slot=%u decision=%u xy_tolerance=%.3f class=%s "
                  "capture_z=%.4f release_z=%.4f serial=%s",
                  compensated_context_.payload_slot, compensated_context_.decision_seq,
-                 drop_compensate_before_descent_ ? drop_pre_descent_config_.xy_tolerance_m : compensatedDropXYTolerance(),
+                 compensatedDropXYTolerance(!drop_compensate_before_descent_),
                  compensated_context_.semantic_target_class.c_str(),
                  external_alignment_capture_height_, drop_release_setpoint_height_,
                  drop_compensate_before_descent_ ? "true" : "false");
@@ -3987,6 +4278,7 @@ bool LLController::freezeCompensatedDropTarget() {
     if (!uav_drop_ready_ || age < 0.0 || age > drop_offset_timeout_) return false;
     compensated_goal_frozen_ = true;
     drop_descent_started_ = false;
+    drop_descent_started_at_ = ros::Time(0);
     drop_descent_profile_.reset();
     drop_release_window_.reset();
     drop_pre_descent_window_.reset();
@@ -4027,6 +4319,12 @@ void LLController::publishCompensatedAlignment() {
         motion_reason ? motion_reason :
         (ready ? (compensated_goal_frozen_ ? "frozen_capture_geometry_valid" : "capture_geometry_valid") :
                  "compensated_not_ready");
+    // Explicit delivery-only state; arbiter still validates the current action,
+    // fresh odom, flight feedback and cancellation before issuing permission.
+    if (feedback.valid && !motion_reason && !compensated_target_outside_boundary_ &&
+        compensated_goal_frozen_ && compensatedDropTimeoutReady() &&
+        externalLandingControlReady(ros::Time::now()))
+        feedback.reason = "descent_timeout_ready";
     compensated_alignment_pub_.publish(feedback);
 }
 
@@ -4120,6 +4418,7 @@ void LLController::servoAlignmentContextCallback(
             msg->semantic_target_first_seen == servo_alignment_context_.semantic_target_first_seen &&
             msg->semantic_target_class == servo_alignment_context_.semantic_target_class) {
             have_servo_alignment_context_ = false;
+            drop_alignment_started_ = drop_descent_started_at_ = ros::Time(0);
             // Revocation blocks future submissions. The proxy owns the raw-call
             // fence; do not discard an already queued RPC's terminal result.
             // In particular ReleaseResult may precede the matching RPC reply.
@@ -4290,9 +4589,12 @@ void LLController::stopDropAction(int servo_id) {
 }
 
 void LLController::resetDropState() {
+    drop_alignment_started_ = drop_timeout_last_check_ = ros::Time(0);
+    drop_timeout_clock_invalid_ = false;
     compensated_target_outside_boundary_ = false;
     compensated_goal_valid_ = compensated_goal_frozen_ = false;
     drop_descent_started_ = false;
+    drop_descent_started_at_ = ros::Time(0);
     drop_descent_profile_.reset();
     compensated_observation_stamp_ = ros::Time(0);
     drop_capture_window_.reset();
@@ -4565,9 +4867,12 @@ void LLController::resetCrossDetectionState() {
 }
 
 void LLController::resetDetectionState() {
+    drop_alignment_started_ = drop_timeout_last_check_ = ros::Time(0);
+    drop_timeout_clock_invalid_ = false;
     compensated_target_outside_boundary_ = false;
     compensated_goal_valid_ = compensated_goal_frozen_ = false;
     drop_descent_started_ = false;
+    drop_descent_started_at_ = ros::Time(0);
     drop_descent_profile_.reset();
     compensated_observation_stamp_ = ros::Time(0);
     drop_capture_window_.reset();

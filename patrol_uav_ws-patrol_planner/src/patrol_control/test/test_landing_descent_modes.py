@@ -60,6 +60,14 @@ int main(){
   ros::clock=106.05;c.tick();close(c.mavros_point_cmd.pose.position.z,.37);
   c.external_landing_cancelled_=true;assert(c.tick()==1);
  }
+ Controller raw;raw.landing_descent_config_.mode=4;
+ raw.uav_pose.pose.position={4,5,.75};
+ raw.external_landing_aligned_goal_.pose.position={1,2,.3};
+ raw.mavros_point_cmd=raw.external_landing_aligned_goal_;
+ raw.fresh=false;assert(raw.tick()==2);
+ close(raw.mavros_point_cmd.pose.position.z,.75);
+ close(raw.mavros_point_cmd.pose.position.x,1);close(raw.mavros_point_cmd.pose.position.y,2);
+ assert(!raw.landing_descent_profile_.active()); // Mode 4 never uses ramp math.
  Controller c;c.landing_descent_config_.mode=2;c.fresh=false;c.uav_pose.pose.position.z=1.2;
  assert(c.tick()==2);close(c.mavros_point_cmd.pose.position.z,1.2);
  assert(!c.landing_descent_profile_.active());

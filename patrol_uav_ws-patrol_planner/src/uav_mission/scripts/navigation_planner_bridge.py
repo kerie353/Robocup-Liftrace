@@ -301,6 +301,11 @@ class NavigationPlannerBridge:
             arrival_dwell_ns=_seconds_to_ns(
                 "arrival_dwell",
                 rospy.get_param("~execution/arrival_dwell", 0.50)),
+            position_only_arrival_goals=rospy.get_param(
+                "~execution/position_only_arrival_goals", []),
+            position_only_arrival_dwell_ns=_seconds_to_ns(
+                "position_only_arrival_dwell", rospy.get_param(
+                    "~execution/position_only_arrival_dwell", 0.30)),
             odom_max_age_ns=_seconds_to_ns(
                 "odom_max_age",
                 rospy.get_param("~execution/odom_max_age", 0.50)),
@@ -334,7 +339,7 @@ class NavigationPlannerBridge:
         self._flight_state_source_ns = 0
         self._landing_handoff_mode = str(rospy.get_param(
             "~landing/handoff_mode", rospy.get_param("/external_landing/handoff_mode", "AUTO.LAND")))
-        if self._landing_handoff_mode not in ("AUTO.LAND", "POSCTL"):
+        if self._landing_handoff_mode not in ("AUTO.LAND", "POSCTL", "OFFBOARD"):
             raise ValueError("unsupported landing handoff mode")
         self._landing_handoff_wait_ns = _seconds_to_ns("handoff_status_wait",
             rospy.get_param("~landing/handoff_status_wait", 0.5))
@@ -1086,6 +1091,16 @@ class NavigationPlannerBridge:
         # After a previously accepted LAND, fresh ON_GROUND + disarmed can
         # finalize the same handoff even after the controller exits LAND.
         disarmed_ground = grounded and state is not None and not state.armed
+        # Direct OFFBOARD touchdown has no mode transition. The controller's
+        # identity-bound OBSERVED means actual ground + disarm were confirmed,
+        # not merely that the vehicle remains in OFFBOARD. Never finish while
+        # still armed: the landing controller must retain ownership until then.
+        if not reason and self._landing_handoff_mode == "OFFBOARD":
+            if not disarmed_ground:
+                reason = "offboard_landing_awaiting_ground_and_disarm"
+            elif not (landing.handoff_requested_ns >= landing.command_sent_ns and
+                      landing.handoff_observed_ns >= landing.handoff_requested_ns):
+                reason = "offboard_landing_awaiting_controller_completion"
         if not reason and not disarmed_ground and self._control_state != 3:
             reason = "control_state_not_landing"
         if (not reason and not disarmed_ground and

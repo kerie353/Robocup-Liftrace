@@ -14,11 +14,13 @@ string semantic_target_class
 # Existing visual mode: drop_circle or drop_cross.
 string align_mode
 bool valid
-# Controller owns compensated FC XY error and settled-speed thresholds.
+# Controller owns compensated FC/outlet XY and the selected pre-descent gate.
 bool aligned
-# Diagnostic only: vision loss must never clear the controller's frozen goal.
+# Vision loss must never clear the frozen goal. With reason=descent_timeout_ready,
+# fresh frozen feedback authorizes the same-action descent timeout release lane.
 bool frozen
 geometry_msgs/Point target_fc
 float64 horizontal_error_m
 float64 horizontal_speed_mps
+# descent_timeout_ready: controller's descent clock expired; not ALIGN age.
 string reason

@@ -11,11 +11,13 @@ from uav_mission.high_view_probe import ProbeConfig
 from uav_high_view.survey_policy import SurveyPolicy
 from uav_mission.execution_speed import FollowingSpeed
 from uav_mission.corridor_speed import CorridorSpeedConfig
+from uav_mission.navigation_following_config import navigation_following_profile, navigation_corridor_schedule
 from uav_mission.motion_optimization import MotionOptimization, optimize_post_route
-from uav_mission.landing_posctl_config import validate_landing_posctl, landing_control_parameters, landing_descent_parameters
+from uav_mission.landing_posctl_config import validate_landing_posctl, landing_control_parameters, landing_descent_parameters, landing_alignment_mode
+from uav_mission.landing_offboard_config import landing_offboard_parameters
 from uav_mission.navigation_recovery_config import recovery_parameters
 from uav_mission.drop_height_config import release_heights
-from uav_mission.drop_descent_config import drop_descent_parameters
+from uav_mission.drop_descent_config import drop_descent_parameters, drop_horizontal_compensation_mode
 
 
 def apply_overrides(settings, motion=None, columns=None, motion_timeout=None, resume=None):
@@ -36,6 +38,7 @@ def apply_overrides(settings, motion=None, columns=None, motion_timeout=None, re
 
 def validate(settings, flight=False):
     drop_descent_parameters(settings)
+    drop_horizontal_compensation_mode(settings)
     if not isinstance(settings,dict):raise ValueError('field configuration must be an object')
     release_heights(settings)
     lead=settings.get('takeoff_z_lead_m',0.)
@@ -49,8 +52,6 @@ def validate(settings, flight=False):
     if type(settings.get('survey_policy',{}).get('resume_survey_enabled',False)) is not bool:
         raise ValueError('resume_survey_enabled must be boolean')
 
-    if settings.get("landing_handoff_mode", "AUTO.LAND") not in ("AUTO.LAND", "POSCTL"):
-        raise ValueError("landing_handoff_mode must be AUTO.LAND or POSCTL")
     validate_landing_posctl(settings)
     recovery_parameters(settings, 0.)  # Validate finite opt-in before ROS starts.
     weight=float(settings.get('planner_line_preference_weight',2.0))
@@ -181,9 +182,9 @@ def generate(root,out,settings,fc_xyz,rig):
     runtime['planner_line_preference']={'weight':weight}
     runtime['search'].update(min_x=cover[0],max_x=cover[1],min_y=cover[2],max_y=cover[3],altitude=low,lane_spacing=settings['lane_spacing'],route_revision='competition-coverage')
     runtime['runtime'].update(start_mode='full',mission_id_prefix='competition')
-    runtime['following_speed_profile']=copy.deepcopy(settings['following_speed_profile'])
+    runtime['following_speed_profile']=navigation_following_profile(settings['following_speed_profile'])
     if settings.get('corridor_speed_schedule'):
-        schedule=copy.deepcopy(settings['corridor_speed_schedule'])
+        schedule=navigation_corridor_schedule(settings['corridor_speed_schedule'])
         schedule['wall_coordinates']=[v+(x if schedule['axis']==0 else y) for v in schedule['wall_coordinates']]
         if motion.enabled: schedule['entry_waypoints']=motion_meta['entry_completed_waypoints']
         runtime['corridor_speed_schedule']=schedule
@@ -195,13 +196,14 @@ def generate(root,out,settings,fc_xyz,rig):
     runtime['high_view_full']=dict(policy=policy,grid=dict(bounds=search,resolution=.10,inflation=.25),boundary_policy=dict(enabled=True,bounds=target))
     ProbeConfig(**runtime['high_view_probe']['config']);SurveyPolicy(**policy)
     control=yaml.safe_load((cfg/'control_base.yaml').read_text())
-    control.update(waypoints=[dict(x=x,y=y,z=low,yaw=0.,pointmode='Takeoff_point',hover_time=0.)],align_height=low,land_height=land_z,px4_max_distance=.4)
+    control.update(waypoints=[dict(x=x,y=y,z=low,yaw=0.,pointmode='Takeoff_point',hover_time=0.)],align_height=low,land_height=land_z,px4_max_distance=.6)
     if 'takeoff_z_lead_m' in settings:
         control['takeoff_z_lead_m']=float(settings['takeoff_z_lead_m'])
     control['switch'].update(auto_land=True,flag_landing_detect=1)
     control['drop_system'].update(enable_drop=True,release_setpoint_height=drop,
         release_min_height=ground+release_min,height_threshold=ground+release_max)
     control['drop_system']['descent'] = drop_descent_parameters(settings)
+    control['drop_system']['pre_descent']['mode'] = drop_horizontal_compensation_mode(settings)
     # 两套表均保留实测值，表示 FC 中心到投口的机体系杆臂，FLU 为前、左、上。
     # 控制器减去经完整机体姿态旋转后的杆臂，不能按固定地图偏移直接相加。
     control['drop_system'].update(slot_offset_semantics='body_flu_lever_arm', compensated_alignment=True)
@@ -212,8 +214,9 @@ def generate(root,out,settings,fc_xyz,rig):
     control['external_landing'].update(frame=rig['mission_frame'],capture_height=capture,auto_land_height=handoff_z,detections_topic='/uav_vision/detections_mapped',handoff_mode=settings.get('landing_handoff_mode','AUTO.LAND'))
     if posctl_stability is not None:
         control['external_landing']['posctl'] = posctl_stability
-    control['external_landing']['alignment_mode'] = settings.get('landing_alignment_mode', 'low')
+    control['external_landing']['alignment_mode'] = landing_alignment_mode(settings)
     control['external_landing']['descent'] = landing_descent_parameters(settings)
+    control['external_landing'].update(landing_offboard_parameters(settings, ground, float(rig['fc_ground_clearance'])))
     overrides={
         '/landing_detector/landing_enable_h_stroke_fallback':settings['landing_enable_h_stroke_fallback'],
         '/fast_planner_node/sdf_map/resolution':.10,
@@ -226,7 +229,7 @@ def generate(root,out,settings,fc_xyz,rig):
         '/fast_planner_node/sdf_map/obstacles_inflation':.25,'/fast_planner_node/sdf_map/obstacles_inflation_up':.20,'/fast_planner_node/sdf_map/obstacles_inflation_down':.10,
         '/fast_planner_node/sdf_map/search_region/enabled':True,
         '/fast_planner_node/fsm/goal_adjustment_radius':.3,
-        '/traj_server/traj_server/target_dist':.4,'/external_planner_start_max_distance':1.2,
+        '/traj_server/traj_server/target_dist':.6,'/external_planner_start_max_distance':1.2,
         '/external_planner_max_command_z':cap,'/navigation/planner_bridge/execution/max_goal_z':cap,
         '/navigation/planner_bridge/execution/initial_plan_timeout':12.,'/navigation/planner_bridge/execution/search_initial_plan_timeout':12.,
         '/fast_planner_node/fsm/liveness_enabled':True,'/fast_planner_node/fsm/server_hold_replan_enabled':True,
@@ -247,6 +250,8 @@ def generate(root,out,settings,fc_xyz,rig):
     # 显式关闭也覆盖 ROS 参数，避免继承上轮的 enabled=true。
     overrides['/navigation/planner_bridge/motion_optimization']=asdict(motion)
     overrides['/takeoff_z_lead_m']=control.get('takeoff_z_lead_m',0.)
+    if settings.get('landing_handoff_mode') == 'OFFBOARD':
+        overrides['/navigation_frame_adapter/landing_touchdown_setpoint_topic'] = control['external_landing']['offboard_setpoint_topic']
     overrides['/fast_planner_node/search/line_deviation_weight']=weight
     overrides['/navigation/planner_bridge/execution/odom_twist_frame']='child'
     for region,box in [('horizontal_avoidance',search),('search_region',search)]:

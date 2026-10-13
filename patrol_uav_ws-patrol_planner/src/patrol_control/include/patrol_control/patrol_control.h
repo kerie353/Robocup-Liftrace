@@ -12,6 +12,10 @@
 #include "patrol_control/landing_high_alignment.h"
 #include "patrol_control/drop_pre_descent_stability.h"
 #include "patrol_control/drop_descent_profile.h"
+#include "patrol_control/offboard_landing.h"
+#include "patrol_control/async_landing_disarm.h"
+#include <mavros_msgs/ExtendedState.h>
+#include <mavros_msgs/PositionTarget.h>
 #include <nav_msgs/Odometry.h>
 #include <uav_vision/DropAlignmentFeedback.h>
 
@@ -127,9 +131,14 @@ private:
     bool compensated_goal_valid_ = false, compensated_goal_frozen_ = false;
     bool drop_compensate_before_descent_ = true, drop_descent_started_ = false;
     bool drop_release_height_only_ = true;
+    bool drop_release_timeout_enabled_ = true;
+    double drop_release_timeout_sec_ = 20.0;
+    ros::Time drop_alignment_started_, drop_descent_started_at_, drop_timeout_last_check_;
+    bool drop_timeout_clock_invalid_ = false;
     DropDescentConfig drop_descent_config_;
     DropDescentProfile drop_descent_profile_;
     ros::Publisher drop_vertical_cmd_pub_;
+    ros::Publisher drop_velocity_cmd_pub_;
     bool dropDescentControlActive() const;
     bool compensated_target_outside_boundary_ = false;
     geometry_msgs::PoseStamped compensated_fc_goal_;
@@ -140,6 +149,9 @@ private:
     double drop_red_cross_xy_tolerance_m_ = 0.04;
     LandingHandoffStabilityWindow drop_capture_window_, drop_release_window_;
     DropPreDescentStabilityConfig drop_pre_descent_config_;
+    int drop_horizontal_compensation_mode_ = 2;
+    double drop_pre_descent_stable_xy_tolerance_m_ = 0.04;
+    double drop_pre_descent_red_cross_xy_tolerance_m_ = 0.04;
     DropPreDescentStabilityWindow drop_pre_descent_window_;
     LandingHandoffStabilityWindow landing_capture_window_, landing_handoff_window_;
     void motionOdomCallback(const nav_msgs::Odometry::ConstPtr& msg);
@@ -148,7 +160,8 @@ private:
     bool freshMotion(Eigen::Vector3d* velocity, Eigen::Vector3d* angular,
                      const char** rejection = nullptr) const;
     bool setCompensatedDropTarget(geometry_msgs::PoseStamped* target);
-    double compensatedDropXYTolerance() const;
+    double compensatedDropXYTolerance(bool release = true) const;
+    bool compensatedDropTimeoutReady();
     bool compensatedDropSettled(bool release, double* error = nullptr,
                                 double* speed = nullptr, bool require_release_height = true);
     double compensatedDropCommandHeight();
@@ -200,6 +213,23 @@ private:
     ros::Subscriber mission_command_sub_;
     ros::Subscriber landing_detections_sub_;
     ros::Subscriber external_landing_state_sub_;
+    ros::Subscriber external_landing_extended_state_sub_;
+    ros::ServiceClient external_landing_disarm_client_;
+    AsyncLandingDisarm external_landing_disarm_worker_;
+    OffboardLandingConfig offboard_landing_config_;
+    OffboardGroundConfirmation offboard_ground_confirmation_;
+    std::string external_landing_extended_state_topic_ = "/mavros/extended_state";
+    std::string external_landing_disarm_service_ = "/mavros/cmd/arming";
+    ros::Time external_landing_last_disarm_attempt_;
+    ros::Time external_landing_disarmed_pending_at_;
+    ros::Publisher external_landing_offboard_setpoint_pub_;
+    std::string external_landing_offboard_setpoint_topic_ = "/navigation/landing_setpoint_touchdown";
+    bool external_landing_offboard_floor_reached_ = false;
+    bool externalLandingOffboardDescentReady();
+    void publishExternalLandingOffboardSetpoint();
+    bool externalLandingOffboardStateReady(const ros::Time& now) const;
+    void externalLandingOffboardTick();
+    void externalLandingExtendedStateCallback(const mavros_msgs::ExtendedState::ConstPtr& msg);
     // 舵机控制发布器
     ros::Publisher servo1_pub_;
     ros::Publisher servo2_pub_;
@@ -299,7 +329,7 @@ private:
     bool external_planner_height_hold_active_ = false;
     geometry_msgs::PoseStamped external_planner_height_hold_;
     std::string external_landing_frame_ = "camera_init";
-    std::string external_landing_alignment_mode_ = "low";
+    std::string external_landing_alignment_mode_ = "non_vh";
     LandingHighAlignmentWindow landing_high_alignment_window_;
     ros::Publisher landing_vertical_cmd_pub_;
     // Reuse only the mathematical ramp; H has its own config and transaction.

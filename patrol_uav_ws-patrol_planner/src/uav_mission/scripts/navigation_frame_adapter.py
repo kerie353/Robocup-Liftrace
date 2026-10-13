@@ -10,10 +10,10 @@ import threading
 import numpy as np
 import rospy
 import tf2_ros
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Pose, PoseStamped
 from nav_msgs.msg import Odometry
 from mavros_msgs.msg import PositionTarget
-from tf.transformations import quaternion_matrix, quaternion_multiply, euler_from_quaternion
+from tf.transformations import quaternion_matrix, quaternion_multiply, euler_from_quaternion, quaternion_from_euler
 
 
 def convert_pose(pose, transform):
@@ -69,11 +69,16 @@ class FrameAdapter:
              '/navigation/landing_setpoint_vertical', '/mavros/setpoint_raw/local'),
             ('drop_vertical', PoseStamped, self.mission, self.local,
              '/navigation/drop_setpoint_vertical', '/mavros/setpoint_raw/local'),
+            ('drop_velocity', PositionTarget, self.mission, self.local,
+             '/navigation/drop_setpoint_velocity', '/mavros/setpoint_raw/local'),
+            ('landing_touchdown', PositionTarget, self.mission, self.local,
+             '/navigation/landing_setpoint_touchdown', '/mavros/setpoint_raw/local'),
         ):
             # Feedback-only mode has no flight-command publisher or subscriber.
-            if name in ('setpoint', 'landing_vertical', 'drop_vertical') and not rospy.get_param('~enable_setpoints', False):
+            if name in ('setpoint', 'landing_vertical', 'drop_vertical', 'drop_velocity', 'landing_touchdown') and not rospy.get_param('~enable_setpoints', False):
                 continue
-            input_topic = rospy.get_param('~' + name + '_input', input_default)
+            input_topic = rospy.get_param('~landing_touchdown_setpoint_topic' if name == 'landing_touchdown'
+                                         else '~' + name + '_input', input_default)
             output_topic = rospy.get_param('~' + name + '_output', output_default)
             if rospy.resolve_name(input_topic) == rospy.resolve_name(output_topic):
                 raise ValueError('adapter input/output loop')
@@ -84,7 +89,7 @@ class FrameAdapter:
                 callback_args=(source, target, pub, name), queue_size=1))
 
     def callback(self, msg, args):
-        if len(args) > 3 and args[3] in ('setpoint', 'landing_vertical', 'drop_vertical'):
+        if len(args) > 3 and args[3] in ('setpoint', 'landing_vertical', 'drop_vertical', 'drop_velocity', 'landing_touchdown'):
             # Serialize both output lanes: an old queued XYZ callback must never
             # override a newer vertical-only command (nor a later abort/hold).
             with self.command_lock:
@@ -98,6 +103,8 @@ class FrameAdapter:
     def convert_and_publish(self, msg, args):
         source, target, pub = args[:3]
         vertical = len(args) > 3 and args[3] in ('landing_vertical', 'drop_vertical')
+        touchdown = len(args) > 3 and args[3] == 'landing_touchdown'
+        drop_velocity = len(args) > 3 and args[3] == 'drop_velocity'
         try:
             age = (rospy.Time.now() - msg.header.stamp).to_sec()
             if (msg.header.frame_id != source or msg.header.stamp.to_sec() <= 0
@@ -111,7 +118,9 @@ class FrameAdapter:
                 raise ValueError('transform timestamp rejected')
             out = copy.deepcopy(msg)
             is_odom = isinstance(msg, Odometry)
-            pose, rotation = convert_pose(msg.pose.pose if is_odom else msg.pose,
+            source_pose = (drop_velocity_pose(msg) if drop_velocity else
+                           touchdown_pose(msg) if touchdown else (msg.pose.pose if is_odom else msg.pose))
+            pose, rotation = convert_pose(source_pose,
                                           transform.transform)
             if is_odom:
                 if not msg.child_frame_id:
@@ -123,11 +132,15 @@ class FrameAdapter:
                 if not np.all(np.isfinite(covariance)):
                     raise ValueError('invalid covariance')
                 out.pose.covariance = (jacobian.dot(covariance).dot(jacobian.T)).ravel().tolist()
-            else:
+            elif not touchdown and not drop_velocity:
                 out.pose = pose
             if vertical:
                 out = (drop_vertical_target(msg.header, pose, rotation)
                        if args[3] == 'drop_vertical' else vertical_target(msg.header, pose, rotation))
+            if touchdown:
+                out = touchdown_target(msg, pose, rotation)
+            if drop_velocity:
+                out = drop_velocity_target(msg, pose, rotation)
             out.header.frame_id = target
             pub.publish(out)
             return True
@@ -135,6 +148,81 @@ class FrameAdapter:
                 tf2_ros.ExtrapolationException) as error:
             rospy.logwarn_throttle(5.0, 'Navigation frame conversion rejected: %s', error)
             return False
+
+
+DROP_VELOCITY_MASK = (PositionTarget.IGNORE_PZ | PositionTarget.IGNORE_VX |
+                      PositionTarget.IGNORE_VY | PositionTarget.IGNORE_AFX |
+                      PositionTarget.IGNORE_AFY | PositionTarget.IGNORE_AFZ |
+                      PositionTarget.IGNORE_YAW_RATE)
+
+
+def drop_velocity_pose(msg):
+    """Delivery mode 4: fixed XY and nonpositive ENU VZ, with Z as TF anchor."""
+    if (not isinstance(msg, PositionTarget)
+            or msg.coordinate_frame != PositionTarget.FRAME_LOCAL_NED
+            or msg.type_mask != DROP_VELOCITY_MASK):
+        raise ValueError('invalid delivery velocity frame/mask')
+    if (not all(math.isfinite(v) for v in (msg.position.x, msg.position.y,
+                                         msg.position.z, msg.velocity.z, msg.yaw))
+            or not -1.0 <= msg.velocity.z <= 0.0):
+        raise ValueError('delivery VZ must be finite and in [-1, 0]')
+    pose = Pose()
+    pose.position = copy.deepcopy(msg.position)
+    q = quaternion_from_euler(0., 0., msg.yaw)
+    pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = q
+    return pose
+
+
+def drop_velocity_target(msg, pose, rotation):
+    if not np.allclose(rotation[:, 2], [0., 0., 1.], atol=1e-6, rtol=0.):
+        raise ValueError('delivery velocity requires gravity-aligned frames')
+    out = PositionTarget()
+    out.header = copy.deepcopy(msg.header)
+    out.coordinate_frame = PositionTarget.FRAME_LOCAL_NED
+    out.type_mask = DROP_VELOCITY_MASK
+    out.position = copy.deepcopy(pose.position)
+    out.velocity.z = float(rotation.dot([0., 0., msg.velocity.z])[2])
+    q = pose.orientation
+    out.yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])[2]
+    return out
+
+
+TOUCHDOWN_MASK = (PositionTarget.IGNORE_PZ | PositionTarget.IGNORE_VX |
+                  PositionTarget.IGNORE_VY | PositionTarget.IGNORE_AFX |
+                  PositionTarget.IGNORE_AFY | PositionTarget.IGNORE_AFZ |
+                  PositionTarget.IGNORE_YAW_RATE)
+
+
+def touchdown_pose(msg):
+    """Validate mode 4's fixed XY / downward VZ contract; Z is only a TF anchor."""
+    if (not isinstance(msg, PositionTarget)
+            or msg.coordinate_frame != PositionTarget.FRAME_LOCAL_NED
+            or msg.type_mask != TOUCHDOWN_MASK):
+        raise ValueError('invalid touchdown coordinate frame/mask')
+    if (not all(math.isfinite(v) for v in (msg.position.x, msg.position.y,
+                                         msg.position.z, msg.velocity.z, msg.yaw))
+            or msg.velocity.z >= 0):
+        raise ValueError('touchdown requires finite pose and negative vertical velocity')
+    pose = Pose()
+    pose.position = copy.deepcopy(msg.position)
+    q = quaternion_from_euler(0., 0., msg.yaw)
+    pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = q
+    return pose
+
+
+def touchdown_target(msg, pose, rotation):
+    if not np.allclose(rotation[:, 2], [0., 0., 1.], atol=1e-6, rtol=0.):
+        raise ValueError('touchdown requires gravity-aligned frames')
+    out = PositionTarget()
+    out.header = copy.deepcopy(msg.header)
+    # ENU data; MAVROS performs ENU->NED. Never enable Z position control.
+    out.coordinate_frame = PositionTarget.FRAME_LOCAL_NED
+    out.type_mask = TOUCHDOWN_MASK
+    out.position = copy.deepcopy(pose.position)
+    out.velocity.z = float(rotation.dot([0., 0., msg.velocity.z])[2])
+    q = pose.orientation
+    out.yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])[2]
+    return out
 
 
 def drop_vertical_target(header, pose, rotation):

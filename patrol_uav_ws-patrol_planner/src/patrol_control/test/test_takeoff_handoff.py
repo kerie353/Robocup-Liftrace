@@ -69,6 +69,9 @@ bool isQuaternionNormalized(const geometry_msgs::Quaternion&q,double tolerance){
 return std::abs(std::sqrt(q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w)-1.)<tolerance;}
 '''+validator+r'''
 struct LLController {
+// Inactive H transport dependencies; this fixture exercises takeoff only.
+bool externalLandingOffboardDescentReady() const { return false; }
+void publishExternalLandingOffboardSetpoint() {}
 int Drone_mode=Takeoff,Point_mode=Nothing_point,current_task_type=MAIN_MISSION;
 bool flag_takeoff_done=false,external_mission_mode_=true,debug=false;
 bool have_planner_cmd=false,external_waiting_for_motion_=false;

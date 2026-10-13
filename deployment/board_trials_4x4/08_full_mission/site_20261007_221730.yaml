@@ -1,4 +1,5 @@
-# 昨日最后现场几何：仅从 board_full_mission_20261007_221730/run_metadata.json 的 settings 提取。
+# 现场几何基于 board_full_mission_20261007_221730/run_metadata.json 的 settings。
+# 2026-10-13 按用户要求：第一门后/第二门前取均值，删除第二门后接力点。
 # 这是有限测试场地，不是 10×10 正赛场地；XY 相对静止起飞参考，FC 搜索 AGL 为 2m。
 # 不包含投递高度或 H 稳定参数；使用各组今天的 settings，不继承历史 validated 旧 H 阈值。
 flight_area:
@@ -65,13 +66,9 @@ corridor_waypoints:
   y: 1.0
   agl: 0.9
 - x: 7.7
-  y: -0.7
-  agl: 0.9
-- x: 7.7
-  y: -1.1
-  agl: 0.9
-- x: 7.7
-  y: -2.5
+  # (-0.7 + -1.1) / 2；同时是 Y=0 门后和 Y=-1.4 门前的最近锚点。
+  # 现有穿门保护规则保留此点，不允许共线接力点自动合并删除。
+  y: -0.9
   agl: 0.9
 - x: 7.7
   y: -3.45

@@ -12,7 +12,8 @@ TRIAL = ROOT / 'deployment/board_trials_4x4/common/uav_board_trials'
 sys.path[:0] = [str(PKG / 'src'), str(ROOT / 'vision_ws/src/uav_high_view/src'),
                str(TRIAL / 'scripts')]
 from uav_mission.landing_posctl_config import (DEFAULTS, validate_landing_posctl,
-                                              landing_control_parameters, landing_descent_parameters)
+                                              landing_control_parameters, landing_descent_parameters,
+                                              landing_alignment_mode)
 from uav_mission.competition_config import generate as competition_generate
 from trial_config import generate as trial_generate, apply_site_profile, validate_settings
 
@@ -36,14 +37,14 @@ class LowHConfigTests(unittest.TestCase):
             control = yaml.safe_load((Path(path) / 'control.yaml').read_text())
         return ref, control
 
-    def check_profile(self, ref, control, mode):
+    def check_profile(self, ref, control, mode, alignment='non_vh'):
         landing = control['external_landing']
         target, trigger = (.35, .40) if mode == 'POSCTL' else (.40, .55)
         self.assertAlmostEqual(control['land_height'] - ref['ground_z'], target)
         self.assertAlmostEqual(landing['auto_land_height'] - ref['ground_z'], trigger)
         self.assertEqual(landing['alignment_tolerance'], .08)
         self.assertEqual(landing['stable_frames'], 10)
-        self.assertEqual(landing['alignment_mode'], 'low')
+        self.assertEqual(landing['alignment_mode'], alignment)
         self.assertEqual(landing['handoff_mode'], mode)
         if mode == 'POSCTL':
             self.assertEqual(landing['posctl'], {k:v for k,v in DEFAULTS.items()
@@ -73,8 +74,9 @@ class LowHConfigTests(unittest.TestCase):
             for mode in ('POSCTL', 'AUTO.LAND'):
                 with self.subTest(name=name, mode=mode):
                     settings['landing_handoff_mode'] = mode
+                    settings['landing_alignment_mode'] = 'vh' if name == '08_full_mission' and mode == 'POSCTL' else 'non_vh'
                     ref, control = self.generated(trial_generate, settings)
-                    self.check_profile(ref, control, mode)
+                    self.check_profile(ref, control, mode, settings['landing_alignment_mode'])
 
     def test_all_hardware_templates_explicitly_declare_the_same_candidate(self):
         files = [ROOT / 'deployment/board_trials_4x4' / name / 'settings.yaml'
@@ -184,27 +186,27 @@ class LowHConfigTests(unittest.TestCase):
         for function, settings in ((trial_generate, trial), (competition_generate, self.settings)):
             _, low = self.generated(function, settings)
             high_settings = copy.deepcopy(settings)
-            high_settings['landing_alignment_mode'] = 'high'
+            high_settings['landing_alignment_mode'] = 'vh'
             _, high = self.generated(function, high_settings)
-            self.assertEqual(high['external_landing']['alignment_mode'], 'high')
-            high['external_landing']['alignment_mode'] = 'low'
+            self.assertEqual(high['external_landing']['alignment_mode'], 'vh')
+            high['external_landing']['alignment_mode'] = 'non_vh'
             self.assertEqual(high, low)
-        apply_site_profile(trial, {'landing_alignment_mode': 'high'})
+        apply_site_profile(trial, {'landing_alignment_mode': 'vh'})
         validate_settings(trial)
         for mode in ('invalid', None, True):
             trial['landing_alignment_mode'] = mode
             with self.assertRaises(ValueError): validate_settings(trial)
-        trial.update(landing_alignment_mode='high', landing_handoff_mode='AUTO.LAND')
+        trial.update(landing_alignment_mode='vh', landing_handoff_mode='AUTO.LAND')
         with self.assertRaisesRegex(ValueError, 'requires POSCTL'): validate_settings(trial)
         non_h = yaml.safe_load((ROOT / 'deployment/board_trials_4x4/01_visual_interrupt/settings.yaml').read_text())
-        with self.assertRaises(ValueError): apply_site_profile(non_h, {'landing_alignment_mode': 'high'})
+        with self.assertRaises(ValueError): apply_site_profile(non_h, {'landing_alignment_mode': 'vh'})
 
 
     def test_descent_modes_are_independent_of_capture_and_delivery(self):
         trial = yaml.safe_load((ROOT / 'deployment/board_trials_4x4/03_h_landing/settings.yaml').read_text())
         for function, settings in ((trial_generate, trial), (competition_generate, self.settings)):
             _, base = self.generated(function, settings)
-            for alignment in ('low', 'high'):
+            for alignment in ('non_vh', 'vh'):
                 for mode in (1, 2, 3):
                     configured = copy.deepcopy(settings)
                     configured.update(landing_alignment_mode=alignment, landing_descent_mode=mode,
@@ -228,6 +230,24 @@ class LowHConfigTests(unittest.TestCase):
             with self.assertRaises(ValueError): landing_descent_parameters(dict(landing_descent_mode=mode))
         for speed in (True, 0, -.1, 1.01, float('nan'), float('inf'), '0.2'):
             with self.assertRaises(ValueError): landing_descent_parameters(dict(landing_descent_speed_mps=speed))
+
+
+    def test_names_legacy_aliases_and_current_full_mission_selection(self):
+        self.assertEqual(landing_alignment_mode({}), 'non_vh')
+        for supplied, expected in (('low', 'non_vh'), ('high', 'vh'),
+                                   ('non_vh', 'non_vh'), ('vh', 'vh')):
+            settings = copy.deepcopy(self.settings)
+            settings['landing_alignment_mode'] = supplied
+            self.assertEqual(landing_alignment_mode(settings), expected)
+            _, control = self.generated(competition_generate, settings)
+            self.assertEqual(control['external_landing']['alignment_mode'], expected)
+        settings = yaml.safe_load((ROOT / 'deployment/board_trials_4x4/08_full_mission/settings.yaml').read_text())
+        self.assertEqual(settings['landing_alignment_mode'], 'vh')
+        self.assertEqual(settings['landing_descent_mode'], 2)
+        settings.update(corridor_waypoints=[dict(x=1., y=0., agl=.9), dict(x=2., y=0., agl=.9)], landing_xy=[2., 0.])
+        _, control = self.generated(trial_generate, settings)
+        self.assertEqual(control['external_landing']['alignment_mode'], 'vh')
+        self.assertEqual(control['external_landing']['descent']['mode'], 2)
 
 
 if __name__ == '__main__':

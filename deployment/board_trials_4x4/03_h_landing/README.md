@@ -1,5 +1,7 @@
 # 专项3：前方H→低空接近→定点爬升→视觉对齐→H降落
 
+2026-10-12：新增可选 mode4/OFFBOARD，[覆盖配置与离线调用](../../competition/candidates/README.md)。用 `--landing-config deployment/competition/candidates/h_offboard_mode4.override.yaml` 叠加原实测现场配置；冻结XY＋负VZ、关闭Z位置控制，新鲜真实落地后普通disarm。默认 mode1/POSCTL 和原 low/high 选项保持；未部署、未动态验收。
+
 > 2026-10-06：现场80×80cm H靶，FC中心离地1.0m接近、1.2m识别；必须飞手手动解锁并拨入OFFBOARD，稳定起飞后自动进入任务。H专项最终视觉对齐、下降后切POSCTL，由飞手接续下降落地，不使用普通组的30cm悬停。
 
 2026-09-27更新：原四组已继承最新板端/研究修复；共同三维膨胀改为27.5/20/10cm，静态TF与关闭虚拟顶棚保持。最新入口见[八组说明](../MODULES.md)，[本次实跑及录像](../../../docs/verification/board_modules_20260927/REPORT.md)。本文旧日期段落只描述当时版本。

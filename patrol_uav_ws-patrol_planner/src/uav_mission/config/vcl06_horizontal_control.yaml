@@ -22,7 +22,7 @@ external_landing:
     mode: 1
     speed_mps: 0.20
     max_step_dt_sec: 0.20
-  alignment_mode: low  # high requires POSCTL and the navigation frame adapter
+  alignment_mode: non_vh  # vh requires POSCTL and the navigation frame adapter
   frame: camera_init
   # 正式链直接消费视觉 typed map detection；旧 PoseStamped 仅留 legacy 模式。
   detections_topic: /uav_vision/detections_mapped
@@ -70,18 +70,30 @@ motion_feedback:
   odom_topic: /mavros/local_position/odom
   twist_frame: child
 drop_system:
+  # 从成功进入下降起计时；满20秒不再等待XY/高度，走同身份异步投递许可。
+  # 取消、有效反馈、飞行状态、边界与防重复仍保留；不影响H降落。
+  release_timeout:
+    enabled: true
+    after_sec: 20.0
   descent:
-    mode: 1  # 1=原三轴位置；2=冻结XY+独立Z；3=水平零速度+独立Z
+    mode: 1  # 1=原XYZ；2=冻结XY+Z轨迹；3=零水平速度；4=冻结XY+VZ加速制动
     speed_mps: 0.20  # 仅模式2/3使用，Z指令下降速度
     max_step_dt_sec: 0.20
     zero_velocity_setpoint_topic: /navigation/drop_setpoint_vertical
+    velocity_setpoint_topic: /navigation/drop_setpoint_velocity
+    velocity_speed_mps: 0.60  # 模式4最高向下速度
+    acceleration_mps2: 0.60
+    braking_mps2: 0.60
+    hold_tolerance_m: 0.015
   release_height_only: true  # 下降后释放几何仅检查高度；保留任务、反馈及执行许可
-  compensate_before_descent: true  # 先高位水平补偿，双XY及水平速度连续达标1秒后下降
-  # 下降入口独立门控；不检查窗口位移、高度误差或竖直速度。
+  compensate_before_descent: true
   pre_descent:
-    xy_tolerance_m: 0.04
-    max_horizontal_speed_mps: 0.10
-    stable_duration_sec: 1.0
+    mode: 2  # 1=双XY+速度连续停稳；2=当前双XY达标即下降
+    stable_xy_tolerance_m: 0.04  # 模式1：FC及投口均<=4cm
+    xy_tolerance_m: 0.06
+    red_cross_xy_tolerance_m: 0.04
+    max_horizontal_speed_mps: 0.10  # 模式1使用
+    stable_duration_sec: 1.0  # 模式1使用
     max_odom_age_sec: 0.20
     max_sample_gap_sec: 0.20
     min_samples: 3
@@ -94,8 +106,8 @@ drop_system:
   # height_tolerance_m、两项速度、stable_duration_sec、max_sample_gap_sec、min_samples
   # 仅兼容保留，不参与补偿投递放行；调这些字段不能改变投递行为。H使用独立配置。
   settle:
-    xy_tolerance_m: 0.06  # 标准大靶：FC及投口误差均严格小于6cm
-    red_cross_xy_tolerance_m: 0.04  # 红十字独立保持4cm，未知类别不放宽
+    xy_tolerance_m: 0.10  # 标准靶末段容差10cm；下降前仍先完成6cm补偿
+    red_cross_xy_tolerance_m: 0.06  # 红十字末段独立6cm；下降前仍4cm
     height_tolerance_m: 0.05
     max_horizontal_speed_mps: 0.05
     max_vertical_speed_mps: 0.10

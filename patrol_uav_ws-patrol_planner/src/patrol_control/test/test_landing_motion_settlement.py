@@ -180,7 +180,7 @@ int main(int argc, char** argv) {
             assert(c.set_mode_client.calls==(i==4 ? 1 : 0));
         }
     } else if (name=="high_alignment_requires_full_second_and_strict_speed") {
-        c.external_landing_alignment_mode_="high";
+        c.external_landing_alignment_mode_="vh";
         for (int i=0;i<=24;++i) {
             feedback(c,100+i*.05,1.2,.04,.1); c.externalLandingTick();
             assert(!c.external_landing_alignment_complete_);
@@ -192,7 +192,7 @@ int main(int argc, char** argv) {
         assert(c.external_landing_aligned_goal_.pose.position.x==1);
         assert(c.patrol_cmd.pose.position.z==.35);
     } else if (name=="high_alignment_stale_images_and_invalid_motion_reset") {
-        c.external_landing_alignment_mode_="high";
+        c.external_landing_alignment_mode_="vh";
         for (int i=0;i<=30;++i) {
             feedback(c,100+i*.05,1.2,.02,0.,i==0); c.externalLandingTick();
             assert(!c.external_landing_alignment_complete_);
@@ -222,10 +222,17 @@ class ProductionHSettlementTests(unittest.TestCase):
         prefix = prefix.replace('    bool highLandingAlignmentReady() { return false; }\n', '')
         prefix = '#include "patrol_control/landing_high_alignment.h"\n' + prefix
         prefix = prefix.replace('#include <array>', '#include <array>\n#include <Eigen/Core>\n#include "patrol_control/landing_handoff_stability.h"\nusing patrol_control::LandingHandoffSample;')
-        prefix = prefix.replace('bool isZero() const', 'double toSec() const { return value; }\n    bool isZero() const')
+        prefix = prefix.replace('namespace Eigen { struct Vector3d {}; }\n', '')
+        prefix = prefix.replace('    struct { struct { struct { Position position; } pose; } pose; } motion_odom_;\n', '')
+        prefix = prefix.replace('    bool freshMotion(Eigen::Vector3d*, Eigen::Vector3d*) { return motion_fresh_; }\n', '')
         signatures = (
             'bool LLController::externalLandingMarkFresh(',
             'bool LLController::externalLandingControlReady(',
+            'bool LLController::externalLandingOffboardStateReady(',
+            'bool LLController::externalLandingOffboardDescentReady(',
+            'void LLController::externalLandingOffboardTick(',
+            'void LLController::externalLandingExtendedStateCallback(',
+            'void LLController::publishExternalLandingOffboardSetpoint(',
             'void LLController::externalLandingStateCallback(',
             'void LLController::publishExternalLandingHandoff(',
             'void LLController::clearExternalLandingState(',

@@ -59,3 +59,7 @@ bash deployment/board_trials_4x4/08_full_mission/start.sh preview \
 ### 2026-10-06 后续部署状态
 
 上述H交接推广现已部署192.168.3.126原0928工程并通过配置检查，未启动新试飞。工作台已增加搜索范围自动航线与FOV图，04走廊点及08走廊/H仍需实测。详见[本次部署报告](../../../docs/deployment/survey_workbench_20261006/REPORT.md)。
+
+可选 OFFBOARD mode4 候选：
+
+用 `--landing-config deployment/competition/candidates/h_offboard_mode4.override.yaml` 叠加原实测 `--site-config`，仅改变H末段：冻结XY＋负VZ、关闭Z位置控制，新鲜真实落地后普通disarm。默认 mode1/POSCTL、投递/路线配置和原low/high对准保持。[参数与离线调用](../../competition/candidates/README.md)；本轮未部署、未动态验收。

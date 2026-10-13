@@ -193,6 +193,7 @@ private:
     AsyncServo async_servo_;
     std::array<AsyncServo, 3> no_ack_servo_workers_;
     bool drop_recover_without_ack_ = true;
+    double drop_recovery_delay_sec_ = 0.5;
     bool drop_recovery_started_ = false;
     uav_vision::AlignmentTargetContext servo_invocation_context_;
     ros::Publisher release_invocation_pub_;

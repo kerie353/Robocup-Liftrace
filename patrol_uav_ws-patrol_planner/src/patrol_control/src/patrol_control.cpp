@@ -2441,6 +2441,10 @@ void LLController::load_params() {
         "drop_system/servo_alignment_context_topic", "/uav_vision/alignment_target_context");
     servo_call_timeout_sec_ = nh_.param("drop_system/servo_call_timeout_sec", 10.0);
     drop_recover_without_ack_ = nh_.param("drop_system/recover_without_ack", true);
+    drop_recovery_delay_sec_ = nh_.param("drop_system/recovery_delay_sec", 0.5);
+    if (!std::isfinite(drop_recovery_delay_sec_) || drop_recovery_delay_sec_ < 0.0) {
+        throw std::invalid_argument("drop_system/recovery_delay_sec must be finite and nonnegative");
+    }
     if (!std::isfinite(servo_call_timeout_sec_) || servo_call_timeout_sec_ <= 0.0) {
         throw std::invalid_argument("drop_system/servo_call_timeout_sec must be positive");
     }
@@ -4479,6 +4483,10 @@ void LLController::beginDropRecoveryWithoutAck() {
         c.semantic_target_id != invoked.semantic_target_id ||
         c.semantic_target_first_seen != invoked.semantic_target_first_seen ||
         c.semantic_target_class != invoked.semantic_target_class || c.align_mode != invoked.align_mode) return;
+    // Wall-clock timing starts in the worker immediately before the RPC.
+    // A fast ACK must not bypass the configured hold time.
+    if (servoWorkerForSlot(servo_action_slot_).invocationElapsedSec(
+            servo_action_id_, servo_action_slot_) < drop_recovery_delay_sec_) return;
     drop_recovery_started_ = true;
     // Consume the attempt for flight sequencing, without synthesizing a Servo ACK.
     drop_complete = true;
@@ -4486,7 +4494,7 @@ void LLController::beginDropRecoveryWithoutAck() {
         drop_completed[detect_point_counter] = true;
     drop_descent_profile_.pause(ros::Time::now().toSec());
     publishDropInvocation();
-    ROS_INFO("[DropSystem] invocation action=%llu slot=%d: recovering immediately, ACK not required",
+    ROS_INFO("[DropSystem] invocation action=%llu slot=%d: recovering after configured delay, ACK not required",
         static_cast<unsigned long long>(servo_action_id_), servo_action_slot_);
 }
 
@@ -4565,9 +4573,11 @@ DropActionResult LLController::executeDropAction(int servo_id) {
 }
 
 void LLController::pollDropAction() {
-    if (!servo_action_pending_) return;
-    if (servoWorkerForSlot(servo_action_slot_).invocationStarted(servo_action_id_, servo_action_slot_))
+    // Continue the recovery timer even when a fast RPC has already completed.
+    if (servo_action_attempted_ &&
+        servoWorkerForSlot(servo_action_slot_).invocationStarted(servo_action_id_, servo_action_slot_))
         beginDropRecoveryWithoutAck();
+    if (!servo_action_pending_) return;
     AsyncServo::Completion completion;
     if (!servoWorkerForSlot(servo_action_slot_).poll(servo_action_id_, servo_action_slot_, &completion)) return;
     servo_action_pending_ = false;
@@ -4585,6 +4595,14 @@ void LLController::pollDropAction() {
         ROS_WARN("[DropSystem] fenced NOT_STARTED action=%llu slot=%d unlocked=%s; await new ALIGN",
                  static_cast<unsigned long long>(completion.action), completion.slot,
                  unlocked ? "true" : "false");
+        return;
+    }
+    if (external_mission_mode_ && drop_recover_without_ack_) {
+        // Record the real outcome; only the invocation timer advances flight.
+        servo_complete.data = false;
+        ROS_INFO("[DropSystem] Servo action=%llu slot=%d result=%d recorded; recovery uses invocation delay",
+            static_cast<unsigned long long>(completion.action), completion.slot,
+            static_cast<int>(completion.result));
         return;
     }
     servo_complete.data = dropActionSucceeded(completion.result);

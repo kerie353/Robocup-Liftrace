@@ -208,6 +208,7 @@ public:
  AsyncServo async_servo_;
     std::array<AsyncServo,3> no_ack_servo_workers_;
     bool drop_recover_without_ack_=false, drop_recovery_started_=false;
+    double drop_recovery_delay_sec_=0.0; // legacy fixtures test the zero-delay policy
     uav_vision::AlignmentTargetContext servo_invocation_context_;
     int invocation_events=0;
     void publishDropInvocation(){++invocation_events;}

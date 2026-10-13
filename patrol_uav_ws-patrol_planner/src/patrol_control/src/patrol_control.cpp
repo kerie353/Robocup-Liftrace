@@ -229,6 +229,8 @@ void LLController::initializeNode() {
     drop_velocity_cmd_pub_ = nh_.advertise<mavros_msgs::PositionTarget>(
         nh_.param<std::string>("drop_system/descent/velocity_setpoint_topic",
             "/navigation/drop_setpoint_velocity"), 1);
+    release_invocation_pub_ = nh_.advertise<patrol_control::ReleaseInvocation>(
+        "/mission/release_invocation", 4, true);
     if (!external_mission_mode_) {
         detect_sub_ = nh_.subscribe(
             "/detect/waypoint_mark_point", 1,
@@ -2438,6 +2440,7 @@ void LLController::load_params() {
     servo_alignment_context_topic_ = nh_.param<std::string>(
         "drop_system/servo_alignment_context_topic", "/uav_vision/alignment_target_context");
     servo_call_timeout_sec_ = nh_.param("drop_system/servo_call_timeout_sec", 10.0);
+    drop_recover_without_ack_ = nh_.param("drop_system/recover_without_ack", true);
     if (!std::isfinite(servo_call_timeout_sec_) || servo_call_timeout_sec_ <= 0.0) {
         throw std::invalid_argument("drop_system/servo_call_timeout_sec must be positive");
     }
@@ -2930,7 +2933,7 @@ bool LLController::DynamicProcess()
                             detect_point_counter + 1, detect_point_counter);
                 }
                 // 防止重复投递：如果已经投递过，直接跳过
-                if(servo_complete.data){
+                if(servo_complete.data || (external_mission_mode_ && drop_recovery_started_)){
                     ROS_INFO("\033[33m[CrossDetectionDone] servo_complete.data: %d\033[0m", servo_complete.data);
                     down_flag = false;
                     align_height = external_mission_mode_ ? external_cross_recovery_setpoint_height_ : 1.15;
@@ -3272,7 +3275,7 @@ bool LLController::WayPointDetectDone()
             }
             ROS_INFO("time_temp : %f" , time_temp);
             // 防止重复投递：如果已经投递过，直接跳过 / 时间到达直接起飞
-            if(servo_complete.data){
+            if(servo_complete.data || (external_mission_mode_ && drop_recovery_started_)){
                 ROS_INFO("\033[33m[WayPointDetectDone] servo_complete.data: %d\033[0m", servo_complete.data);
                 // down_flag = false;
                 align_height = external_mission_mode_ ? external_standard_recovery_setpoint_height_ : 1.2;
@@ -4439,6 +4442,54 @@ void LLController::servoAlignmentContextCallback(
     have_servo_alignment_context_ = true;
 }
 
+AsyncServo& LLController::servoWorkerForSlot(int slot) {
+    // One bounded worker per physical slot in no-ACK policy. A hung old RPC
+    // cannot block issuing the next slot; the actuator proxy keeps its own lock.
+    return external_mission_mode_ && drop_recover_without_ack_ && slot >= 1 && slot <= 3
+        ? no_ack_servo_workers_[slot-1] : async_servo_;
+}
+
+void LLController::publishDropInvocation() {
+    const auto& c = servo_invocation_context_;
+    patrol_control::ReleaseInvocation message;
+    message.header.stamp = ros::Time::now();
+    message.header.frame_id = uav_pose.header.frame_id;
+    message.request_id = servo_action_id_;
+    message.mission_id = c.mission_id;
+    message.decision_seq = c.decision_seq;
+    message.attempt = c.attempt;
+    message.payload_slot = c.payload_slot;
+    message.target_id = c.semantic_target_id;
+    message.target_first_seen = c.semantic_target_first_seen;
+    message.target_class = c.semantic_target_class;
+    message.align_mode = c.align_mode;
+    release_invocation_pub_.publish(message);
+}
+
+void LLController::beginDropRecoveryWithoutAck() {
+    if (!external_mission_mode_ || !drop_recover_without_ack_ || drop_recovery_started_ ||
+        !servo_action_attempted_ || Drone_mode != Aligning ||
+        !have_servo_alignment_context_ || !servo_alignment_context_.active ||
+        servo_alignment_context_.deadline <= ros::Time::now() ||
+        !externalLandingControlReady(ros::Time::now())) return;
+    const auto& c = servo_alignment_context_;
+    const auto& invoked = servo_invocation_context_;
+    if (c.mission_id != invoked.mission_id || c.decision_seq != invoked.decision_seq ||
+        c.attempt != invoked.attempt || c.payload_slot != invoked.payload_slot ||
+        c.semantic_target_id != invoked.semantic_target_id ||
+        c.semantic_target_first_seen != invoked.semantic_target_first_seen ||
+        c.semantic_target_class != invoked.semantic_target_class || c.align_mode != invoked.align_mode) return;
+    drop_recovery_started_ = true;
+    // Consume the attempt for flight sequencing, without synthesizing a Servo ACK.
+    drop_complete = true;
+    if (detect_point_counter >= 0 && detect_point_counter < static_cast<int>(drop_completed.size()))
+        drop_completed[detect_point_counter] = true;
+    drop_descent_profile_.pause(ros::Time::now().toSec());
+    publishDropInvocation();
+    ROS_INFO("[DropSystem] invocation action=%llu slot=%d: recovering immediately, ACK not required",
+        static_cast<unsigned long long>(servo_action_id_), servo_action_slot_);
+}
+
 DropActionResult LLController::executeDropAction(int servo_id) {
     if (servo_id < 1 || servo_id > 3) return DropActionResult::kInvalidServoId;
     if (servo_action_attempted_) {
@@ -4497,13 +4548,14 @@ DropActionResult LLController::executeDropAction(int servo_id) {
             return classifyDropAction(slot, ok, ok && srv.response.res);
         };
     }
-    const bool submitted = async_servo_.submit(
+    const bool submitted = servoWorkerForSlot(servo_id).submit(
         servo_action_id_, servo_id, servo_call_timeout_sec_, execute);
     if (!submitted) return DropActionResult::kRejected;
     servo_action_slot_ = servo_id;
     servo_action_attempted_ = true;
     servo_action_pending_ = true;
     servo_action_result_ = DropActionResult::kPending;
+    servo_invocation_context_ = servo_alignment_context_;
     ROS_INFO("[DropSystem] async Servo submitted action=%llu slot=%d "
         "stage=release_rpc decision=%u observed_fc_z=%.4f release_z=%.4f pose_source=%.6f",
         static_cast<unsigned long long>(servo_action_id_),servo_id,
@@ -4514,8 +4566,10 @@ DropActionResult LLController::executeDropAction(int servo_id) {
 
 void LLController::pollDropAction() {
     if (!servo_action_pending_) return;
+    if (servoWorkerForSlot(servo_action_slot_).invocationStarted(servo_action_id_, servo_action_slot_))
+        beginDropRecoveryWithoutAck();
     AsyncServo::Completion completion;
-    if (!async_servo_.poll(servo_action_id_, servo_action_slot_, &completion)) return;
+    if (!servoWorkerForSlot(servo_action_slot_).poll(servo_action_id_, servo_action_slot_, &completion)) return;
     servo_action_pending_ = false;
     if (completion.status != AsyncServo::Status::kCompleted) {
         servo_action_result_ = DropActionResult::kServiceCallFailed;
@@ -4526,7 +4580,7 @@ void LLController::pollDropAction() {
     }
     servo_action_result_ = completion.result;
     if (completion.result == DropActionResult::kNotStarted) {
-        const bool unlocked = async_servo_.releaseNotStarted(completion.action, completion.slot);
+        const bool unlocked = servoWorkerForSlot(completion.slot).releaseNotStarted(completion.action, completion.slot);
         servo_complete.data = false;
         ROS_WARN("[DropSystem] fenced NOT_STARTED action=%llu slot=%d unlocked=%s; await new ALIGN",
                  static_cast<unsigned long long>(completion.action), completion.slot,
@@ -4550,7 +4604,7 @@ void LLController::pollDropAction() {
 
 void LLController::cancelDropAction() {
     if (!servo_action_pending_) return;
-    async_servo_.cancel();
+    servoWorkerForSlot(servo_action_slot_).cancel();
     servo_action_pending_ = false;
     servo_action_result_ = DropActionResult::kServiceCallFailed;
     servo_complete.data = false;
@@ -4614,6 +4668,7 @@ void LLController::resetDropState() {
     ++servo_action_id_;
     servo_action_slot_ = 0;
     servo_action_attempted_ = false;
+    drop_recovery_started_ = false;
     servo_action_result_ = DropActionResult::kPending;
     drop_condition_met = false;
     current_pixel_error = 1000.0;
@@ -4831,7 +4886,7 @@ bool LLController::CrossDetectionDone() {
                         detect_point_counter + 1, detect_point_counter);
             }
             // 防止重复投递：如果已经投递过，直接跳过
-            if(servo_complete.data){
+            if(servo_complete.data || (external_mission_mode_ && drop_recovery_started_)){
                 ROS_INFO("\033[33m[CrossDetectionDone] servo_complete.data: %d\033[0m", servo_complete.data);
                 down_flag = false;
                 align_height = external_mission_mode_ ? external_cross_recovery_setpoint_height_ : 1.15;
@@ -4877,6 +4932,7 @@ void LLController::resetCrossDetectionState() {
 }
 
 void LLController::resetDetectionState() {
+    drop_recovery_started_ = false;
     drop_alignment_started_ = drop_timeout_last_check_ = ros::Time(0);
     drop_timeout_clock_invalid_ = false;
     compensated_target_outside_boundary_ = false;

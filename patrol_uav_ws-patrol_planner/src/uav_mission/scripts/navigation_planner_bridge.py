@@ -23,7 +23,7 @@ from nav_msgs.msg import Odometry
 from plan_manage.msg import PlannerStatus
 from std_msgs.msg import Int8, String
 
-from patrol_control.msg import MissionCommand
+from patrol_control.msg import MissionCommand, ReleaseInvocation
 from navigation_recovery_msgs.msg import NavigationRecoveryContext
 from uav_mission.msg import NavigationDecision, NavigationResult
 from uav_mission.msg import ReleaseResult
@@ -137,6 +137,9 @@ class TargetTransaction:
     release_execution_id: int = 0
     release_ack_ns: int = 0
     raw_call_observed: bool = False
+    release_invocation_observed: bool = False
+    release_request_id: int = 0
+    release_invoked_ns: int = 0
     cancellation_reason: str = ""
     contradiction_window: object = None
 
@@ -405,6 +408,10 @@ class NavigationPlannerBridge:
         self._release_result_sub = rospy.Subscriber(
             "release_result", ReleaseResult,
             self._on_release_result, queue_size=4)
+        self._release_invocation_sub = rospy.Subscriber(
+            "/mission/release_invocation", ReleaseInvocation,
+            self._on_release_invocation, queue_size=4)
+        self._recover_without_ack = bool(rospy.get_param("/drop_system/recover_without_ack", True))
         self._control_state_sub = rospy.Subscriber(
             "control_state", Int8, self._on_control_state, queue_size=2)
         self._align_mode_sub = rospy.Subscriber(
@@ -893,9 +900,10 @@ class NavigationPlannerBridge:
             )
 
     def _release_result_matches(self, transaction, message):
-        if (transaction is None or transaction.phase not in (
+        if (transaction is None or (transaction.phase not in (
                 "ALIGN_COMMAND_SENT", "ALIGNMENT", "CANCEL_PENDING", "EXPIRED",
-                "RELEASE_UNCERTAIN")):
+                "RELEASE_UNCERTAIN") and not (transaction.release_invocation_observed and
+                                              transaction.phase == "RECOVERY"))):
             return False
         target = transaction.decision.target
         if (int(message.execution_id) <= 0 or
@@ -1018,18 +1026,19 @@ class NavigationPlannerBridge:
         transaction = self._transaction
         if transaction is None or transaction.phase != "RECOVERY":
             return
+        recovery_reference_ns = transaction.release_invoked_ns or transaction.release_ack_ns
         reason = self._odom_rejection_reason(sample, now_ns)
         if not reason and sample.z < self._recovery_height:
             reason = "recovery_height_not_reached"
         if not reason and self._control_state != 1:
             reason = "control_state_not_run"
         if (not reason and
-                self._control_state_receipt_ns < transaction.release_ack_ns):
+                self._control_state_receipt_ns < recovery_reference_ns):
             reason = "control_state_predates_release"
         if not reason and self._align_mode != "disabled":
             reason = "alignment_still_active"
         if (not reason and
-                self._align_mode_receipt_ns < transaction.release_ack_ns):
+                self._align_mode_receipt_ns < recovery_reference_ns):
             reason = "align_mode_predates_release"
         moving=getattr(self,'_motion_options',MotionOptimization())
         if reason:
@@ -1040,7 +1049,7 @@ class NavigationPlannerBridge:
         moving_allowed=(moving.enabled and moving.moving_recovery and
                         getattr(self,'_odom_velocity_available',False))
         if moving_allowed:
-            if not self._moving_recovery.update(sample,transaction.release_ack_ns,now_ns,
+            if not self._moving_recovery.update(sample,recovery_reference_ns,now_ns,
                     moving.recovery_min_ack_seconds,moving.recovery_max_vz,
                     moving.recovery_min_samples,moving.recovery_max_odom_age):
                 return
@@ -1049,6 +1058,8 @@ class NavigationPlannerBridge:
                 sample.stamp_ns, sample.x, sample.y, sample.z)
             if not settle.ready:
                 return
+        if transaction.release_invocation_observed:
+            self._publish_alignment_context(False, now_ns)
         self._report_target_stage(
             "SUCCEEDED", "RECOVERY", now_ns,
             terminal=True,
@@ -1435,6 +1446,49 @@ class NavigationPlannerBridge:
             except Exception as error:  # pylint: disable=broad-except
                 self._handle_callback_exception("release_context", error)
 
+    def _on_release_invocation(self, message):
+        """Consume an invoked slot and recover without claiming a hardware ACK."""
+        with self._lock:
+            try:
+                if not self._output_enabled or not getattr(self, "_recover_without_ack", False):
+                    return
+                now_ns = self._now_ns()
+                self._expire_handoff_if_due(now_ns)
+                transaction = self._transaction
+                if transaction is None or transaction.phase not in ("ALIGN_COMMAND_SENT", "ALIGNMENT"):
+                    return
+                stamp_ns = _stamp_to_ns(message.header.stamp)
+                if (int(message.request_id) <= 0 or stamp_ns < transaction.decision.issued_at_ns or
+                        stamp_ns > now_ns + self._executor.config.source_future_tolerance_ns or
+                        now_ns-stamp_ns > 500_000_000 or now_ns >= transaction.decision.deadline_ns):
+                    return
+                target = transaction.decision.target
+                expected = (transaction.decision.mission_id, transaction.decision.decision_seq,
+                            target.attempt, target.payload_slot, target.target_id,
+                            target.first_seen_ns, target.class_name)
+                if action_identity(message) != expected or str(message.align_mode) != transaction.align_mode:
+                    return
+                if transaction.phase == "ALIGN_COMMAND_SENT":
+                    self._mark_alignment_started(transaction, now_ns,
+                        "alignment_accepted_before_invocation", "patrol_control")
+                transaction.release_invocation_observed = True
+                transaction.release_request_id = int(message.request_id)
+                transaction.release_invoked_ns = now_ns
+                source = "patrol_control_invocation:%d" % int(message.request_id)
+                self._report_target_stage("STARTED", "RELEASE", now_ns,
+                    reason="servo_service_invoked", evidence_source=source, transaction=transaction)
+                self._report_target_stage("PROGRESS", "RELEASE", now_ns,
+                    payload_committed=True, reason="invocation_consumes_slot_ack_not_required",
+                    evidence_source=source, transaction=transaction)
+                transaction.phase = "RECOVERY"
+                # Keep the context until recovery completes: withdrawing it here
+                # could race the guarded proxy's initial admission of the RPC.
+                if hasattr(self, "_moving_recovery"):
+                    self._moving_recovery.reset()
+                self._recovery_settle.reset("awaiting_post_invocation_state")
+            except Exception as error:
+                self._handle_callback_exception("release_invocation", error)
+
     def _on_release_result(self, message):
         with self._lock:
             try:
@@ -1449,6 +1503,14 @@ class NavigationPlannerBridge:
                 if transaction is None:
                     return
                 fact = execution_fact(message)
+                if (transaction.release_invocation_observed or
+                        (getattr(self, "_recover_without_ack", False) and
+                         transaction is self._transaction and
+                         transaction.phase in ("ALIGN_COMMAND_SENT", "ALIGNMENT"))):
+                    transaction.raw_call_observed |= fact in (RAW_CALL_STARTED, COMPLETED)
+                    rospy.loginfo("Release outcome after no-ACK recovery: state=%s terminal=%s reason=%s",
+                                  fact, result_terminal(message), str(message.reason))
+                    return  # audit only; cannot rewind recovery or consume another slot
                 terminal = result_terminal(message)
                 execution_id = int(message.execution_id)
                 if (transaction.release_execution_id and
@@ -1684,8 +1746,9 @@ class NavigationPlannerBridge:
                     if self._transaction is not None and self._transaction.phase == "CANCEL_PENDING":
                         self._publish_alignment_context(False, now_ns)
                     if (self._transaction is not None and
-                            self._transaction.phase in (
-                                "ALIGN_COMMAND_SENT", "ALIGNMENT")):
+                            (self._transaction.phase in ("ALIGN_COMMAND_SENT", "ALIGNMENT") or
+                             (self._transaction.phase == "RECOVERY" and
+                              self._transaction.release_invocation_observed))):
                         self._publish_alignment_context(True, now_ns)
                 self._publish_status()
             except Exception as error:  # pylint: disable=broad-except
@@ -1707,6 +1770,8 @@ class NavigationPlannerBridge:
             "diagnostic_only_intents": self._last_diagnostic_intents,
             "target_transaction": {
                 "raw_call_observed": bool(self._transaction and self._transaction.raw_call_observed),
+                "release_invocation_observed": bool(self._transaction and self._transaction.release_invocation_observed),
+                "recover_without_ack": bool(getattr(self, "_recover_without_ack", False)),
                 "cancellation_reason": self._transaction.cancellation_reason if self._transaction else "",
                 "decision_seq": (
                     self._transaction.decision.decision_seq

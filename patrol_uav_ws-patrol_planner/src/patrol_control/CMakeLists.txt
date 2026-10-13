@@ -66,6 +66,7 @@ add_message_files(
   FILES
   MissionCommand.msg
   ReleaseAuthorization.msg
+  ReleaseInvocation.msg
 )
 
 ## Generate services in the 'srv' folder

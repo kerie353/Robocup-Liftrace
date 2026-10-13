@@ -19,6 +19,7 @@ def topics_for(settings):
         "/mavros/setpoint_raw/local",
         "/navigation/drop_setpoint_vertical",
         "/navigation/drop_setpoint_velocity",
+        "/mission/release_invocation",
         "/fastplanner/goal","/planning/goal_status","/planning/bspline","/planning/pos_cmd",
         "/planning/replan","/planning/new","/planning_vis/trajectory",
         "/planning/progress",

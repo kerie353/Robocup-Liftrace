@@ -205,7 +205,14 @@ public:
  bool externalLandingControlReady(ros::Time)const{return control_ready;}
  bool hasFreshMissionReleasePermission()const{return permission_ready;}
  ros::ServiceClient servo_client,servo_action_client_;
- AsyncServo async_servo_; std::uint64_t servo_action_id_=1;
+ AsyncServo async_servo_;
+    std::array<AsyncServo,3> no_ack_servo_workers_;
+    bool drop_recover_without_ack_=false, drop_recovery_started_=false;
+    uav_vision::AlignmentTargetContext servo_invocation_context_;
+    int invocation_events=0;
+    void publishDropInvocation(){++invocation_events;}
+    AsyncServo& servoWorkerForSlot(int);
+    void beginDropRecoveryWithoutAck(); std::uint64_t servo_action_id_=1;
  int servo_action_slot_=0; bool servo_action_attempted_=false,servo_action_pending_=false;
  DropActionResult servo_action_result_=DropActionResult::kPending;
  double servo_call_timeout_sec_=10; struct {bool data=false;}servo_complete;
@@ -241,6 +248,9 @@ public:
  void projectDropOffsetToTarget(const uav_vision::DropOffset&);
  void servoAlignmentContextCallback(const uav_vision::AlignmentTargetContext::ConstPtr&);
  DropActionResult executeDropAction(int); void pollDropAction();void cancelDropAction();
+ double external_standard_recovery_setpoint_height_=1.4,external_cross_recovery_setpoint_height_=1.4,external_recovery_height_=.95;
+ bool beginCircleRecovery(){ CIRCLE_RECOVERY_START return false; }
+ bool beginCrossRecovery(){ CROSS_RECOVERY_START return false; }
  void resetDropState();void clearUavVisionAlignmentState();void resetDetectionState();
  void advanceCircle(){int servo_id=1; CIRCLE_DESCENT }
  void advanceCross(){int servo_id=1; CROSS_DESCENT }
@@ -582,6 +592,32 @@ int main(int argc,char**argv){
    for(int i=1;i<=60;++i)profile.update(101.2+i*.1);
    close(profile.height(),.4);profile.reset();assert(!profile.active());
    config.mode=5;assert(!config.valid());config.mode=3;config.speed_mps=0;assert(!config.valid());
+  }else if(name=="no_ack_circle_cross_recovery"){
+   serial_test=true;height_only_test=true;
+   for(int mode=1;mode<=4;++mode){
+    for(bool cross:{false,true}){
+     ros::clock_sec=100;LLController d;d.drop_recover_without_ack_=true;
+     d.nh_.values["drop_system/descent/mode"]=mode;d.loadDropSequenceConfig();
+     d.servo_alignment_context_.align_mode=cross?"drop_cross":"drop_circle";
+     d.servo_alignment_context_.semantic_target_class=cross?"red_cross":"panzer";
+     d.current_align_mode_=d.servo_alignment_context_.align_mode;
+     d.servo_alignment_target_class_=d.servo_alignment_context_.semantic_target_class;
+     auto transport=std::make_shared<Transport>();
+     d.servo_client.impl=d.servo_action_client_.impl=transport;
+     capture(d);settle_before_descent(d,101);const auto g=d.compensated_fc_goal_.pose.position;
+     odom(d,102,g.x,g.y,.40);
+     assert(d.executeDropAction(1)==DropActionResult::kPending);
+     const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+     while(transport->calls==0&&std::chrono::steady_clock::now()<until)std::this_thread::yield();
+     assert(transport->calls==1);d.pollDropAction();
+     assert(d.drop_complete&&d.drop_recovery_started_&&!d.servo_complete.data);
+     assert(d.invocation_events==1&&!d.dropDescentControlActive());
+     assert(cross?d.beginCrossRecovery():d.beginCircleRecovery());
+     close(d.align_height,1.4);if(cross)assert(!d.down_flag);
+     d.pollDropAction();assert(d.invocation_events==1&&transport->calls==1);
+     finish(d,transport);
+    }
+   }
   }else if(name=="mode_two_three_mps"){
    DropDescentConfig config;config.mode=2;config.speed_mps=3.;assert(config.valid());
    DropDescentProfile profile(config);assert(profile.start(1.4,.4,100));
@@ -617,7 +653,7 @@ int main(int argc,char**argv){
    config.braking_mps2=0;assert(!config.valid());
   }else if(name=="velocity_descent_command"){
    ros::clock_sec=100;LLController d;d.nh_.values["drop_system/descent/mode"]=4;
-   d.loadDropSequenceConfig();capture(d);settle_before_descent(d,101);
+   d.loadDropSequenceConfig();capture(d);d.drop_release_height_only_=true;settle_before_descent(d,101);
    const auto g=d.compensated_fc_goal_.pose.position;
    odom(d,101.1,g.x+.2,g.y-.2,1);assert(d.composeDropDescentCommand()==4);
    close(d.last_drop_vz,-.06);close(d.mavros_point_cmd.pose.position.x,g.x);
@@ -1132,6 +1168,8 @@ class CompensatedDropGeometryTests(unittest.TestCase):
             'void LLController::applyDropSlotOffset(',
             'void LLController::projectDropOffsetToTarget(',
             'void LLController::servoAlignmentContextCallback(',
+            'AsyncServo& LLController::servoWorkerForSlot(',
+            'void LLController::beginDropRecoveryWithoutAck(',
             'DropActionResult LLController::executeDropAction(',
             'void LLController::pollDropAction(',
             'void LLController::cancelDropAction(',
@@ -1140,6 +1178,11 @@ class CompensatedDropGeometryTests(unittest.TestCase):
             'void LLController::resetDetectionState(',
         )
         production = '\n'.join(method(source, signature) for signature in signatures)
+        def recovery_start(signature):
+            body=method(source, signature)
+            start=body.index('if(servo_complete.data || (external_mission_mode_ && drop_recovery_started_)){')
+            end=body.index('if(uav_pose.pose.position.z >= recovery_height){', start)
+            return body[start:end]+'return true; }'
         # Run the actual default assignments, not a second hand-maintained policy.
         start = source.index('    drop_settle_config_.xy_tolerance_m =')
         end = source.index('    load_stability(', start)
@@ -1186,6 +1229,8 @@ class CompensatedDropGeometryTests(unittest.TestCase):
                        .replace('CONFIGURED_DROP', configured_assignments)
                        .replace('EXTERNAL_GUARD', source[guard_start:guard_end])
                        .replace('DROP_DESCENT_COMMANDS', source[descent_start:descent_end])
+                       .replace('CIRCLE_RECOVERY_START',recovery_start('bool LLController::WayPointDetectDone('))
+                       .replace('CROSS_RECOVERY_START',recovery_start('bool LLController::CrossDetectionDone('))
                        .replace('CIRCLE_RELEASE', outer_release('bool LLController::WayPointDetectDone('))
                        .replace('CROSS_RELEASE', outer_release('bool LLController::CrossDetectionDone('))
                        .replace('CIRCLE_DESCENT', circle).replace('CROSS_DESCENT', cross), encoding='utf-8')
@@ -1223,6 +1268,7 @@ class CompensatedDropGeometryTests(unittest.TestCase):
     def test_independent_descent_rate_pause_floor_and_invalid_config(self): self.run_case('serial_descent_profile')
     def test_mode_four_acceleration_braking_and_latched_terminal_hold(self): self.run_case('velocity_descent_profile')
     def test_mode_two_three_mps_slope_floor_and_other_mode_limits(self): self.run_case('mode_two_three_mps')
+    def test_circle_cross_all_descent_modes_climb_before_ack_and_submit_once(self): self.run_case('no_ack_circle_cross_recovery')
     def test_mode_four_missed_feedback_pause_restart_and_invalid_config(self): self.run_case('velocity_descent_pause')
     def test_mode_four_frozen_xy_release_while_descending_and_position_hold(self): self.run_case('velocity_descent_command')
     def test_height_only_circle_and_cross_release_after_xy_rebound(self): self.run_case('height_only_rpc')

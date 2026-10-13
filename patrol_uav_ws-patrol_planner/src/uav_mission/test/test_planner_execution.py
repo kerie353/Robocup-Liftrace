@@ -39,7 +39,8 @@ class PlannerMotionExecutorTest(unittest.TestCase):
             with self.subTest(command=command):
                 executor = self.make()
                 executor.config = replace(executor.config,
-                    position_only_arrival_goals=((1., 2., 2.2),))
+                    position_only_arrival_goals=((1., 2., 2.2),),
+                    position_only_arrival_dwell_enabled=True)
                 self.dispatch(executor, decision(command=command))
                 start = self.finish(executor) + 10_000_000
                 self.assertEqual(executor.apply_odom(odom(start, 1.), start).reason,
@@ -55,6 +56,27 @@ class PlannerMotionExecutorTest(unittest.TestCase):
                 now = start + 300_000_000
                 out = executor.apply_odom(odom(now, 1.), now)
                 self.assertTrue(any(e.status == 'SUCCEEDED' for e in out.events))
+
+    def test_fixed_waypoint_dwell_off_checks_position_without_waiting_or_speed(self):
+        for command in ('SEARCH', 'RESUME', 'RETURN_HOME'):
+            with self.subTest(command=command):
+                executor = self.make()
+                executor.config = replace(executor.config,
+                    position_only_arrival_goals=((1., 2., 2.2),))
+                self.assertFalse(executor.config.position_only_arrival_dwell_enabled)
+                self.dispatch(executor, decision(command=command))
+                now = self.finish(executor) + 10_000_000
+                outside = replace(odom(now, 1.), x=1.5)
+                self.assertEqual(executor.apply_odom(outside, now).reason,
+                                 'arrival_threshold_not_met')
+                now += 10_000_000
+                out = executor.apply_odom(odom(now, 1.), now)
+                self.assertTrue(any(e.status == 'SUCCEEDED' for e in out.events))
+
+    def test_dwell_switch_rejects_non_boolean_values(self):
+        for value in ('false', 0, None):
+            with self.assertRaises(ValueError):
+                PlannerMotionConfig(position_only_arrival_dwell_enabled=value)
 
     def test_position_only_policy_preserves_target_and_unlisted_motion(self):
         for command, goals in (('APPROACH', ((1., 2., 2.2),)),

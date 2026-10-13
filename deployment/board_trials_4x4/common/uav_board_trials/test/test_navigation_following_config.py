@@ -63,9 +63,30 @@ class NavigationFollowingConfig(unittest.TestCase):
                         [[x+.01,y-.01,1.73] for x,y in s['flight_area']['survey_xy']] +
                         r['mission']['post_delivery_route'])
                     self.assertEqual(o['/navigation/planner_bridge/execution/position_only_arrival_dwell'],.3)
+                    self.assertFalse(o['/navigation/planner_bridge/execution/position_only_arrival_dwell_enabled'])
                     self.assertEqual(o['/navigation/planner_bridge/execution/arrival_dwell'],.8)
                 else:
                     self.assertEqual(o[key],[])
+
+    def test_08_ordinary_waypoint_dwell_switch_in_both_speed_profiles(self):
+        from trial_speed_profiles import apply_speed_profile
+        s=yaml.safe_load((BASE/'08_full_mission/settings.yaml').read_text())
+        apply_site_profile(s,yaml.safe_load((BASE/'08_full_mission/site_20261007_221730.yaml').read_text()))
+        rig=yaml.safe_load((BASE/'common/uav_board_trials/config/known_rig.yaml').read_text())
+        for profile in ('limited','competition'):
+            for enabled in (False,True):
+                active=copy.deepcopy(s)
+                apply_speed_profile(ROOT,active,'full_mission',profile)
+                active['ordinary_waypoint_dwell_enabled']=enabled
+                with tempfile.TemporaryDirectory() as out:
+                    generate(ROOT,out,active,(0.,0.,0.),rig)
+                    o=yaml.safe_load((Path(out)/'overrides.yaml').read_text())
+                self.assertEqual(o['/navigation/planner_bridge/execution/position_only_arrival_dwell_enabled'],enabled)
+                self.assertEqual(o['/navigation/planner_bridge/execution/position_only_arrival_dwell'],.3)
+                self.assertTrue(o['/navigation/planner_bridge/execution/position_only_arrival_goals'])
+        active=copy.deepcopy(s);active['ordinary_waypoint_dwell_enabled']='false'
+        with tempfile.TemporaryDirectory() as out:
+            with self.assertRaises(ValueError):generate(ROOT,out,active,(0.,0.,0.),rig)
 
     def test_formal_and_archived_inputs_generate_current_policy(self):
         rig = yaml.safe_load((MISSION / 'config/competition/known_rig.yaml').read_text())

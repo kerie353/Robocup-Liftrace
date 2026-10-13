@@ -63,3 +63,9 @@ bash deployment/board_trials_4x4/08_full_mission/start.sh preview \
 可选 OFFBOARD mode4 候选：
 
 用 `--landing-config deployment/competition/candidates/h_offboard_mode4.override.yaml` 叠加原实测 `--site-config`，仅改变H末段：冻结XY＋负VZ、关闭Z位置控制，新鲜真实落地后普通disarm。默认 mode1/POSCTL、投递/路线配置和原low/high对准保持。[参数与离线调用](../../competition/candidates/README.md)；本轮未部署、未动态验收。
+
+### 普通航点到达时间开关
+
+`settings.yaml` 的 `ordinary_waypoint_dwell_enabled` 默认 `false`：固定普通航点在原位置容差内即可推进，不额外等待；设为 `true` 后要求位置连续达标 0.3 秒。两种设置都不检查到达速度，且不改变起飞、动态重访、投递 APPROACH、视觉对准、恢复及 H 降落交接条件。新设置在下次启动生成配置后生效。
+
+可在原第08组启动命令后追加 `--ordinary-waypoint-dwell on` 或 `--ordinary-waypoint-dwell off` 覆盖 YAML；有限空间和正赛速度档均支持。此开关只取消到达计时，不取消位置、定位新鲜度、规划身份或动作超时检查。

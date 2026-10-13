@@ -191,7 +191,7 @@ def build_group_command(config, group, mode, route=None, real_release=None,
                 or any(ch in landing_config for ch in '\r\n\x00')):
             raise ValueError('invalid landing_config path')
         if not (route == 'competition' and group.get('channel') == 'competition'
-                or route == 'module' and folder in ('03_h_landing', '04_corridor_landing', '08_full_mission')):
+                or route == 'module' and folder in ('03_h_landing', '04_corridor_landing', '05_low_multi', '08_full_mission')):
             raise ValueError('landing_config only applies to H module or competition entries')
         landing_extra = ' --landing-config ' + quote(landing_config.strip())
     if group.get("channel") == "competition":
@@ -249,7 +249,7 @@ def build_group_command(config, group, mode, route=None, real_release=None,
 
     extra = landing_extra
     if speed_profile is not None:
-        if folder != "08_full_mission" or route != "module" or speed_profile not in ("limited", "competition"):
+        if folder not in ("05_low_multi", "08_full_mission") or route != "module" or speed_profile not in ("limited", "competition"):
             raise ValueError("08速度版本只支持模块08的 limited/competition")
         extra += " --speed-profile " + speed_profile
     if capture_speed is not None:

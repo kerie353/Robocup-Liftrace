@@ -13,8 +13,30 @@ TRIAL_FOLDERS = {
     'high_speed_capture': '09_high_speed_capture',
 }
 HIGH_MODES = ('high_view', 'high_priority', 'memory_only', 'high_view_full', 'high_speed_capture')
-H_MODES = ('landing', 'high_view_full')
+H_MODES = ('landing', 'high_view_full', 'low_multi_full')
 NO_DROP_MODES = ('landing', 'memory_only', 'high_speed_capture')
+
+def load_trial_settings(root, folder):
+    """03 exercises the current 08 H policy, retaining its own mission/geometry.
+
+    Resolve before measured-site and explicit CLI overrides. Optional H blocks
+    removed from 08 must not survive as stale values in the standalone template.
+    """
+    base = Path(root) / 'deployment/board_trials_4x4'
+    settings = yaml.safe_load((base / folder / 'settings.yaml').read_text())
+    if folder != '03_h_landing':
+        return settings
+    full = yaml.safe_load((base / '08_full_mission/settings.yaml').read_text())
+    if not isinstance(settings, dict) or not isinstance(full, dict):
+        raise ValueError('H/full mission settings must be mappings')
+    if any(key not in full for key in ('landing_transit_agl', 'landing_capture_agl')):
+        raise ValueError('08 H policy requires transit and capture heights')
+    validate_landing_posctl(full)
+    def policy(key):
+        return key.startswith('landing_') and key != 'landing_xy'
+    settings = {key: value for key, value in settings.items() if not policy(key)}
+    settings.update({key: copy.deepcopy(value) for key, value in full.items() if policy(key)})
+    return settings
 
 def apply_site_profile(settings, profile):
     """Merge measured site geometry without changing the module's mission kind."""
@@ -23,7 +45,9 @@ def apply_site_profile(settings, profile):
              'bag_image_hz','bag_image_topic','record_inflated_cloud','record_map_clouds'}
     if settings['mode'] in H_MODES:
         allowed.update(('landing_xy', 'landing_handoff_mode', 'landing_handoff_status_topic', 'landing_posctl', 'landing_alignment_mode', 'landing_descent_mode', 'landing_descent_speed_mps', 'landing_offboard'))
-    if settings.get('trial_kind') in ('corridor_landing','full_mission'):
+    if settings.get('mode') in ('low_multi','low_multi_full'):
+        allowed.update(('search_waypoints_xy', 'landing_xy'))
+    if settings.get('trial_kind') in ('corridor_landing','full_mission','low_multi_corridor'):
         allowed.update(('corridor_waypoints','corridor_geometry'))
     if not isinstance(profile,dict) or set(profile)-allowed:
         raise ValueError('Unsupported site profile key')
@@ -91,8 +115,12 @@ def validate_settings(settings):
     budget=settings.get('motion_action_timeout',30.)
     if isinstance(budget,bool) or not isinstance(budget,(int,float)) or not math.isfinite(budget) or not 0<budget<=600:
         raise ValueError('Invalid motion_action_timeout; expected seconds in (0,600]')
-    if settings.get('mode') not in ('visual_interrupt','low_multi',*HIGH_MODES,'landing'):
+    if settings.get('mode') not in ('visual_interrupt','low_multi','low_multi_full',*HIGH_MODES,'landing'):
         raise ValueError('Unknown trial mode')
+    if settings.get('mode')=='low_multi_full' and settings.get('trial_kind')!='low_multi_corridor':
+        raise ValueError('Low multi H mode requires its measured corridor configuration')
+    if settings.get('trial_kind')=='low_multi_corridor' and settings.get('mode')!='low_multi_full':
+        raise ValueError('Low multi corridor/H kind requires low_multi_full mode')
     if 'landing_handoff_mode' in settings and settings['mode'] not in H_MODES:
         raise ValueError('landing_handoff_mode only applies to visual H landing')
     if 'landing_posctl' in settings and settings['mode'] not in H_MODES:
@@ -120,11 +148,11 @@ def validate_settings(settings):
         raise ValueError('raw_servo_service must be an independent absolute hardware service')
     profile=settings.get('speed_profile','limited')
     if 'ordinary_waypoint_dwell_enabled' in settings:
-        if settings.get('trial_kind') != 'full_mission':
+        if settings.get('trial_kind') not in ('full_mission','low_multi_corridor'):
             raise ValueError('ordinary waypoint dwell switch only applies to 08 full mission')
         if type(settings['ordinary_waypoint_dwell_enabled']) is not bool:
             raise ValueError('ordinary_waypoint_dwell_enabled must be boolean')
-    if profile not in ('limited','competition') or (profile=='competition' and settings.get('trial_kind')!='full_mission'):
+    if profile not in ('limited','competition') or (profile=='competition' and settings.get('trial_kind') not in ('full_mission','low_multi_corridor')):
         raise ValueError('Competition speed profile only applies to 08 full mission')
     fast=settings['mode']=='high_speed_capture' or profile=='competition'
     if 'following_speed_profile' in settings:
@@ -158,7 +186,7 @@ def validate_settings(settings):
     from trial_motion import motion_options
     motion_options(settings)
     area=flight_geometry(settings);cb=area['center_bounds']
-    if settings['mode'] in H_MODES and settings.get('trial_kind') not in ('corridor_landing','full_mission'):
+    if settings['mode'] in H_MODES and settings.get('trial_kind') not in ('corridor_landing','full_mission','low_multi_corridor'):
         landing=settings.get('landing_xy')
         if (not isinstance(landing,list) or len(landing)!=2 or
                 any(isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) for v in landing)):
@@ -177,7 +205,15 @@ def validate_settings(settings):
                 not math.isfinite(v) or not max(.35,cb[0])<=v<=cb[1] for v in line) or
             any(a>=b for a,b in zip(line,line[1:]))):
         raise ValueError('search_line_x must advance inside flight_area center bounds')
-    if settings.get('trial_kind') not in ('corridor_landing','full_mission'):
+    if 'search_waypoints_xy' in settings:
+        points=settings['search_waypoints_xy']
+        if settings['mode'] not in ('low_multi','low_multi_full') or not isinstance(points,list) or not 2<=len(points)<=100:
+            raise ValueError('Low multi search requires 2..100 XY waypoints')
+        for v in points:
+            if (not isinstance(v,list) or len(v)!=2 or any(type(n) not in (int,float) or not math.isfinite(n) for n in v)
+                    or not max(.35,cb[0])<=v[0]<=cb[1] or not cb[2]<=v[1]<=cb[3]):
+                raise ValueError('Low multi search point outside flight_area')
+    if settings.get('trial_kind') not in ('corridor_landing','full_mission','low_multi_corridor'):
         return
     points=settings.get('corridor_waypoints')
     if not isinstance(points,list) or len(points)<2:
@@ -216,7 +252,7 @@ def generate(root,out,settings,fc_xyz,rig):
     if not .15<=settings['drop_agl']<=1.0 or land_z<=0.:raise ValueError('Drop AGL or landing local-Z bounds not met')
     point=lambda a,b,h:[x+a,y+b,h]
     runtime=yaml.safe_load((root/'docs/verification/fov_landing_inner_20260919/seed_2672/fast_runtime.yaml').read_text())
-    m=runtime['mission'];m.update(home_xy=[x,y],landing_xy=[x+.6,y],approach_altitude=low,return_altitude=low,timeout=600. if mode=='high_view_full' else 300.,forced_return_at=510. if mode=='high_view_full' else 240.,post_delivery_route_revision='board-'+mode,
+    m=runtime['mission'];m.update(home_xy=[x,y],landing_xy=[x+.6,y],approach_altitude=low,return_altitude=low,timeout=600. if mode in ('high_view_full','low_multi_full') else 300.,forced_return_at=510. if mode in ('high_view_full','low_multi_full') else 240.,post_delivery_route_revision='board-'+mode,
         post_delivery_route=[point(.6,0,low)],post_delivery_parameter_stages=[],early_return_enabled=False,delivery_reserve_per_slot=25.,return_land_reserve=45.,nominal_speed=float(settings['cruise_speed']),motion_action_timeout=float(settings.get('motion_action_timeout',30.)),target_action_timeout=60.)
     runtime.pop('corridor_speed_schedule',None);runtime.pop('fixed_search_region',None)
     sx0,sx1,sy0,sy1=area['search_bounds']
@@ -225,7 +261,11 @@ def generate(root,out,settings,fc_xyz,rig):
     # Do not make reaching a distant, possibly occupied endpoint a prerequisite
     # for seeing the target in front. Every shorter leg still uses Fast-Planner.
     line=[point(v,0,low) for v in settings.get('search_line_x',[.6,1.2,1.8,2.4,3.0])]
+    if mode in ('low_multi','low_multi_full') and 'search_waypoints_xy' in settings:
+        line=[point(a,b,low) for a,b in settings['search_waypoints_xy']]
     runtime['trial']=dict(mode=mode,waypoints=line,camera_info_topic=settings.get('camera_info_topic','/camera/camera_info'),delivery_count=settings.get('delivery_count',2),actuator_mode=actuator)
+    if mode in ('low_multi','low_multi_full'):
+        runtime['trial']['corridor_after_delivery']=settings.get('trial_kind')=='low_multi_corridor'
     if mode=='high_speed_capture':
         runtime['trial']['capture']=dict(speed=settings['cruise_speed'],lighting=settings.get('capture_lighting','unspecified'),
             route='flight_area.survey_xy',survey_xy=copy.deepcopy(area['survey_xy']))
@@ -234,10 +274,11 @@ def generate(root,out,settings,fc_xyz,rig):
     if mode=='landing':
         hx,hy=settings['landing_xy'];transit=ground+settings['landing_transit_agl']
         m.update(landing_xy=[x+hx,y+hy],return_altitude=capture,post_delivery_route=[point(max(.6,hx-.7),hy,transit),point(hx,hy,transit),point(hx,hy,capture)])
-    if settings.get('trial_kind') in ('corridor_landing','full_mission'):
+    if settings.get('trial_kind') in ('corridor_landing','full_mission','low_multi_corridor'):
         hx,hy=settings['landing_xy']
         route=[point(w['x'],w['y'],ground+float(w.get('agl',settings['low_agl']))) for w in settings['corridor_waypoints']]
-        for final in [point(hx,hy,ground+settings['landing_transit_agl']),point(hx,hy,capture)]:
+        suffix=[point(hx,hy,ground+settings['landing_transit_agl']),point(hx,hy,capture)]
+        for final in suffix:
             if any(abs(a-b)>1e-6 for a,b in zip(route[-1],final)):route.append(final)
         m.update(post_delivery_route=route,post_delivery_route_revision='board-'+settings['trial_kind'],landing_xy=[x+hx,y+hy])
     if mode=='high_view_full':
@@ -343,11 +384,12 @@ def generate(root,out,settings,fc_xyz,rig):
     overrides.update(recovery_parameters({},ground))
     from trial_motion import apply_generated_motion
     motion_report=apply_generated_motion(runtime,control,overrides,settings,ground)
-    if settings.get('trial_kind') == 'full_mission':
+    if settings.get('trial_kind') in ('full_mission','low_multi_corridor'):
         # Module 08 fixed survey/staging/post-delivery goals only. Dynamic revisit,
         # APPROACH, recovery and landing handoff keep their existing conditions.
-        ordinary_goals=[point(*area['staging_xy'],low),point(*area['staging_xy'],high)]
-        ordinary_goals.extend(point(a,b,high) for a,b in area['survey_xy'])
+        ordinary_goals=(copy.deepcopy(line) if mode in ('low_multi','low_multi_full') else
+                        [point(*area['staging_xy'],low),point(*area['staging_xy'],high)])
+        if mode not in ('low_multi','low_multi_full'):ordinary_goals.extend(point(a,b,high) for a,b in area['survey_xy'])
         ordinary_goals.extend(copy.deepcopy(runtime['mission']['post_delivery_route']))
         overrides['/navigation/planner_bridge/execution/position_only_arrival_goals']=ordinary_goals
         overrides['/navigation/planner_bridge/execution/position_only_arrival_dwell']=.3

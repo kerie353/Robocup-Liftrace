@@ -107,7 +107,7 @@
     <arg name="pose_topic" value="/navigation/local_pose" />
     <arg name="public_service_name" value="/board_trials/Servo" />
   </include>
-  <node pkg="uav_board_trials" type="trial_auto_land.py" name="trial_auto_land" output="screen" required="true" if="$(eval arg('enable_control_output') and not arg('terminal_hover_enabled') and arg('mode') not in ['landing','high_view_full','high_speed_capture'])">
+  <node pkg="uav_board_trials" type="trial_auto_land.py" name="trial_auto_land" output="screen" required="true" if="$(eval arg('enable_control_output') and not arg('terminal_hover_enabled') and arg('mode') not in ['landing','high_view_full','low_multi_full','high_speed_capture'])">
     <rosparam file="$(arg generated_dir)/auto_land.yaml" />
   </node>
   <node pkg="uav_board_trials" type="trial_terminal_hover.py" name="trial_terminal_hover" required="true" output="screen" if="$(eval arg('enable_control_output') and arg('terminal_hover_enabled'))">

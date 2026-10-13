@@ -881,7 +881,7 @@ function groupCommandBody(g, mode, realRelease, checkConfig, speed, options) {
   if (speed !== null && speed !== undefined) extra += ' --capture-speed ' + Number(speed).toFixed(1);
   if (options.capture_lighting) extra += ' --capture-lighting ' + options.capture_lighting;
   if (options.speed_profile != null) {
-    if (folder !== '08_full_mission' || route !== 'module' || ['limited','competition'].indexOf(options.speed_profile) < 0)
+    if (['05_low_multi','08_full_mission'].indexOf(folder) < 0 || route !== 'module' || ['limited','competition'].indexOf(options.speed_profile) < 0)
       return {body:null,note:'08速度版本只支持limited/competition'};
     extra += ' --speed-profile ' + options.speed_profile;
   }
@@ -1210,7 +1210,7 @@ function groupCard(g) {
     ops.appendChild(el('div','warn-line','必填正赛实测场地与确认项；默认模板未确认。运动优化/障碍柱继承时不发送覆盖参数，当前有效值以配置检查输出为准；关闭障碍柱移除配置柱，不会关闭真实点云避障。'));
   }
   if (g.speed_profile_options) {
-    choiceRow('08速度版本','speedProfile',g.speed_profile_options.map(function(item){return [item.value,item.label];}));
+    choiceRow(g.folder==='05_low_multi'?'任务二速度版本':'08速度版本','speedProfile',g.speed_profile_options.map(function(item){return [item.value,item.label];}));
     ops.appendChild(el('div','warn-line','沿用2026-10-07最后221730现场几何与FC高2m；不是10×10正赛场地。1.2/1.0为配置上限，尚未实飞验收。距离单位m，不是实测速度。'));
     ops.appendChild(el('div','tiny muted',competitionEffectiveConfig(g,trialBody(g,'preview',true),state.stage,state.trial)));
   }

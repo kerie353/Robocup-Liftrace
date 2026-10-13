@@ -1,5 +1,30 @@
 # 专项3：前方H→低空接近→定点爬升→视觉对齐→H降落
 
+## 2026-10-14 当前入口：使用08的H降落配置
+
+03是独立H测试任务，不执行投递或全场搜索。`start.sh`/工作台的03入口启动时，
+从 `08_full_mission/settings.yaml` 读取全部 `landing_*` 策略字段（除 `landing_xy`）；
+以后修改08的H设置，03下次启动会自动跟随。03的设置文件中保留当前值供查看，
+启动加载时以08为准。下方旧日期的高度及模式描述属于历史记录。
+
+当前08：`vh` 对准（≤6cm、水平速度<0.1m/s持续1s），下降模式2（冻结H的XY＋独立Z轨迹），
+Z轨迹速度 **1.0m/s**；FC识别高度1.2m、下降目标0.35m；低位检查通过后切POSCTL，飞手完成落地。
+速度是设定高度的变化率，不保证实测下降速度。08后续更改时应以其实际配置及检查输出为准。
+
+03只保留自己的任务类型、航线、场地范围和H位置；H位置仍从专项现场配置的
+`landing_xy` 获取，当前示例为 `[2.0, 0.0]`，需与实际摆放位置一致。
+现场配置和显式CLI覆盖仍拥有原来的优先级；测试08原配置时，不添加额外的
+`--landing-config`、H模式或下降速度覆盖选项。
+
+配置检查（不启动ROS节点或飞行）：
+
+```bash
+bash deployment/board_trials_4x4/03_h_landing/start.sh preview \
+  --site-config deployment/site_20260928/h_landing_test_area.yaml --check-config
+```
+
+随后仍使用本页下方03的预览/实飞入口。当前修改未部署，板端需先同步这些入口脚本与配置。
+
 2026-10-12：新增可选 mode4/OFFBOARD，[覆盖配置与离线调用](../../competition/candidates/README.md)。用 `--landing-config deployment/competition/candidates/h_offboard_mode4.override.yaml` 叠加原实测现场配置；冻结XY＋负VZ、关闭Z位置控制，新鲜真实落地后普通disarm。默认 mode1/POSCTL 和原 low/high 选项保持；未部署、未动态验收。
 
 > 2026-10-06：现场80×80cm H靶，FC中心离地1.0m接近、1.2m识别；必须飞手手动解锁并拨入OFFBOARD，稳定起飞后自动进入任务。H专项最终视觉对齐、下降后切POSCTL，由飞手接续下降落地，不使用普通组的30cm悬停。

@@ -6,13 +6,13 @@ import math
 import shlex
 import wb_survey
 
-CORRIDOR_FOLDERS = ('04_corridor_landing', '08_full_mission')
+CORRIDOR_FOLDERS = ('04_corridor_landing', '05_low_multi', '08_full_mission')
 SURVEY_FOLDERS = ('02_high_view_revisit','06_high_priority','07_memory_only','08_full_mission','09_high_speed_capture')
 FOLDERS = tuple(set(CORRIDOR_FOLDERS + SURVEY_FOLDERS))
 
 
 def validate_geometry(value):
-    if not isinstance(value, dict) or set(value) - {'corridor_waypoints', 'landing_xy', 'corridor_geometry', 'flight_area','survey_plan'}:
+    if not isinstance(value, dict) or set(value) - {'corridor_waypoints', 'landing_xy', 'corridor_geometry', 'flight_area','survey_plan','search_waypoints_xy'}:
         raise ValueError('只允许走廊航点、H坐标、墙面几何与flight_area；不修改速度或飞行模式')
     def number(v):
         return type(v) in (int, float) and math.isfinite(v)
@@ -47,6 +47,10 @@ def validate_geometry(value):
         elif key == 'survey_xy':
             if not isinstance(v,list) or not 3<=len(v)<=100 or not all(vector(p,2) for p in v):raise ValueError('survey_xy需至少三个XY点')
         elif not vector(v,3 if key=='map_size' else 2):raise ValueError('无效'+key)
+    if 'search_waypoints_xy' in value:
+        search=value['search_waypoints_xy']
+        if not isinstance(search,list) or not 2<=len(search)<=100 or not all(vector(v,2) for v in search):
+            raise ValueError('低空搜索需2～100个有限XY航点')
     if 'survey_plan' in value:wb_survey.plan(value['survey_plan'])
     return json.loads(json.dumps(value, allow_nan=False))
 
@@ -101,6 +105,7 @@ def overlay_command(source, folder, geometry, revision):
     clean=validate_geometry(geometry)
     if 'survey_plan' in clean and folder not in SURVEY_FOLDERS:raise ValueError('该组没有高位搜索阶段')
     if any(k in clean for k in ('landing_xy','corridor_waypoints','corridor_geometry')) and folder not in CORRIDOR_FOLDERS:raise ValueError('该组不使用走廊/H航点')
+    if 'search_waypoints_xy' in clean and folder!='05_low_multi':raise ValueError('低空XY航点仅适用于任务二')
     data=json.dumps(clean,sort_keys=True,separators=(',',':'),allow_nan=False)
     token=hashlib.sha256((source+'\n'+folder+'\n'+revision+'\n'+data).encode()).hexdigest()[:20]
     relative='logs/flight_workbench/site_overlays/'+folder+'_'+token+'.yaml'

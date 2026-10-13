@@ -29,3 +29,9 @@ drop_system:
 6项Python恢复回归通过、Python测试文件语法解析及git diff --check通过。新增3项C++时序用例（快速成功ACK、失败、RPC卡住），未编译执行；生产C++也未重新编译，旧可执行文件不含0.5秒改动。已告知用户需编译后生效。未启动飞行或机构。
 
 快照：/home/orangepi/.codex_backups/drop_recovery_delay_20261014。
+
+## 后续编译验收
+
+用户明确要求编译后，板端执行 make -C patrol_uav_ws-patrol_planner/build patrol_control/fast -j2 成功。30项异步C++检查（含3项0.5秒时序用例）、74项补偿控制C++检查全部通过。旧测试辅助函数误要求无ACK模式产生成功ACK标志，已只修正辅助断言；生产逻辑未再修改。新的可执行文件包含drop_system/recovery_delay_sec参数。未启动/重启控制器、飞行或机构，下次按原入口生成配置及启动生效。
+
+日志：/home/orangepi/.codex_backups/drop_recovery_delay_20261014/{async_tests.log,geometry_tests.log,controller_build.log}。

@@ -297,7 +297,8 @@ void finish(LLController&c,const std::shared_ptr<Transport>&t){
  const auto end=std::chrono::steady_clock::now()+std::chrono::seconds(2);
  while(c.servo_action_pending_&&std::chrono::steady_clock::now()<end){
   c.pollDropAction();std::this_thread::sleep_for(std::chrono::milliseconds(1));}
- assert(!c.servo_action_pending_&&c.drop_complete&&c.servo_complete.data);
+ assert(!c.servo_action_pending_&&c.drop_complete);
+ assert(c.servo_complete.data == !c.drop_recover_without_ack_);
 }
 void settle_before_descent(LLController&c,double start,double height=1){
  const auto g=c.compensated_fc_goal_.pose.position;

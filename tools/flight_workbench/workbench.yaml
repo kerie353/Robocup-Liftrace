@@ -263,13 +263,20 @@ groups:
     folder: "05_low_multi"
     channel: module
     section: site
-    name: "现场第2组 · 低空连续多投（默认两投）"
-    plan: "低位搜索、中断、投递、恢复搜索，默认两投。"
-    ending: "完成指定投递后下降至30cm悬停，飞手落地"
+    name: "现场第2组 · 低空多投接走廊/H（默认两投）"
+    plan: "可编辑低空XY航线，视觉中断连续两投，投满后走廊避障、H视觉降落。"
+    ending: "穿廊到H对准下降后交接POSCTL，飞手完成落地"
     release: real
     release_options: [mock, real]
     motion_optimization_supported: true
     needs_servo: true
+
+    needs_waypoints: true
+    site_config: "deployment/board_trials_4x4/05_low_multi/site.yaml"
+    speed_profile_options:
+      - {value: "", label: "有限空间 · 0.5m/s / 0.35m/s²"}
+      - {value: "competition", label: "参考08速度 · 1.2m/s / 1.0m/s²"}
+    notes: "低空1.4m搜索；走廊/H初始几何复制08当前现场，换场地须重新实测。地图可编辑搜索XY、走廊和H点。速度档不覆盖本组投递参数。"
 
   - id: site3
     key: "3"

@@ -16,7 +16,7 @@ from uav_high_view.grid_cost import GridCost
 helper_dir=Path(__file__).resolve().parent
 if not (helper_dir/'trial_runtime.py').exists():helper_dir=Path(rospkg.RosPack().get_path('uav_board_trials'))/'scripts'
 sys.path.insert(0,str(helper_dir))
-from trial_runtime import SingleDeliveryRuntime,FullCircleRuntime,OpenTourGrid,MultiDeliveryRuntime,PriorityRevisitRuntime,MemoryOnlyRuntime,FullMissionTrialRuntime,HighSpeedCaptureRuntime
+from trial_runtime import SingleDeliveryRuntime,FullCircleRuntime,OpenTourGrid,MultiDeliveryRuntime,MultiDeliveryCorridorRuntime,PriorityRevisitRuntime,MemoryOnlyRuntime,FullMissionTrialRuntime,HighSpeedCaptureRuntime
 from trial_config import HIGH_MODES,H_MODES
 path=Path(rospkg.RosPack().get_path('uav_mission'))/'scripts/navigation_mission_manager.py'
 spec=importlib.util.spec_from_file_location('board_existing_mission_shell',path);base=importlib.util.module_from_spec(spec);spec.loader.exec_module(base)
@@ -42,7 +42,9 @@ class BoardManager(HighViewStageMixin,base.NavigationMissionManager):
         route=CoverageRoute(points,'board-trial-search',1)
         self._low_limits_applied=None if self._high_stage_parameters is not None else False
         self._probe_limit_switch=None
-        if self.mode=='low_multi':return MultiDeliveryRuntime(ordinary.core,route,delivery_count=rospy.get_param('~trial/delivery_count',2))
+        if self.mode in ('low_multi','low_multi_full'):
+            runtime_class=(MultiDeliveryCorridorRuntime if rospy.get_param('~trial/corridor_after_delivery',False) else MultiDeliveryRuntime)
+            return runtime_class(ordinary.core,route,delivery_count=rospy.get_param('~trial/delivery_count',2))
         if self.mode not in HIGH_MODES:return SingleDeliveryRuntime(ordinary.core,route)
         cfg=dict(rospy.get_param('~high_view_probe/config'));cfg['survey_xy']=tuple(tuple(v) for v in cfg['survey_xy'])
         if cfg.get('staging_xy'):cfg['staging_xy']=tuple(cfg['staging_xy'])

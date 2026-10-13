@@ -39,6 +39,9 @@ def evaluate(supervisor,latest,settings):
                  and 1<=high.get('trial_memory_count',0)<=3)
     else:
         success=landed and (local_landed or manual_landed) and 1<=expected<=3 and committed==expected
+    if trial=='low_multi' and settings.get('trial_kind')=='low_multi_corridor':
+        success=(landed and healthy and mission.get('phase')=='COMPLETE' and committed==expected
+                 and mission.get('post_delivery_route_complete') is True)
     return dict(status=('CAPTURED' if trial=='high_speed_capture' else 'PASS') if success else 'INCOMPLETE',trial=trial,
                 actuator_mode=supervisor.get('actuator_mode',settings.get('actuator_mode','mock')),
                 expected_deliveries=expected,committed_deliveries=committed,

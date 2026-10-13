@@ -12,7 +12,7 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('trial',choices=sorted(TRIAL_FOLDERS));p.add_argument('mode',choices=['preview','flight']);p.add_argument('--root',type=Path,required=True);p.add_argument('--model',type=Path);p.add_argument('--metadata',type=Path);p.add_argument('--check-config',action='store_true');p.add_argument('--site-config',type=Path);p.add_argument('--real-release',action='store_true');p.add_argument('--mapping-startup-config',type=Path);p.add_argument('--capture-speed',type=float,choices=(.5,1.,1.2));p.add_argument('--capture-lighting',choices=('normal','dim','unspecified'));p.add_argument('--motion-optimized',action='store_true');p.add_argument('--survey-pattern',choices=('rectangle','snake2','snake3'))
     p.add_argument('--resume-survey',choices=('on','off'),help='Override interrupted survey resume for priority/full mission; omit to inherit settings')
     p.add_argument('--landing-alignment-mode',choices=('non_vh','vh'),help='H landing only: non_vh keeps ten-frame capture; vh aligns for 1s; descent policy is selected separately')
-    p.add_argument('--speed-profile',choices=('limited','competition'),help='08 only: same measured field, explicit planning/following speeds')
+    p.add_argument('--speed-profile',choices=('limited','competition'),help='08/low multi: same measured field, explicit planning/following speeds')
     p.add_argument('--ordinary-waypoint-dwell',choices=('on','off'),help='08 fixed waypoints: on checks position for 0.3s; off advances at position arrival (default)')
     p.add_argument('--generate-config',type=Path,help='With --check-config: write configuration only, never start ROS')
     p.add_argument('--reference-fc',type=float,nargs=3,metavar=('X','Y','Z'),help='Stationary reference for offline generation')
@@ -20,6 +20,7 @@ def main():
     p.add_argument('--landing-descent-speed-mps',type=float,help='H descent profile speed; default 0.20m/s; mode 4 controller uses landing_offboard.descent_speed separately')
     p.add_argument('--landing-handoff-mode',choices=('AUTO.LAND','POSCTL','OFFBOARD'),help='OFFBOARD must be paired with descent mode 4')
     p.add_argument('--landing-config',type=Path,help='Optional small H candidate override YAML; preserves site geometry and defaults')
+    p.add_argument('--flight-config',type=Path,help='Task 2 preflight drop/H parameter override')
     a=p.parse_args()
     if a.generate_config and (not a.check_config or a.reference_fc is None):
         p.error('--generate-config requires --check-config and --reference-fc X Y Z')
@@ -42,10 +43,10 @@ def main():
         try:apply_speed_profile(a.root,settings,a.trial,a.speed_profile)
         except ValueError as error:p.error(str(error))
     if a.ordinary_waypoint_dwell is not None:
-        if a.trial != 'full_mission':p.error('--ordinary-waypoint-dwell only applies to 08 full mission')
+        if a.trial not in ('full_mission','low_multi'):p.error('--ordinary-waypoint-dwell only applies to full mission/low multi')
         settings['ordinary_waypoint_dwell_enabled']=a.ordinary_waypoint_dwell=='on'
     if a.landing_config:
-        if settings['mode'] not in ('landing','high_view_full'):p.error('--landing-config only applies to visual H landing')
+        if settings['mode'] not in ('landing','high_view_full','low_multi_full'):p.error('--landing-config only applies to visual H landing')
         from uav_mission.landing_offboard_config import apply_landing_override
         try:settings=apply_landing_override(settings,yaml.safe_load(a.landing_config.read_text()))
         except ValueError as error:p.error(str(error))
@@ -54,6 +55,11 @@ def main():
     if a.landing_descent_speed_mps is not None:settings['landing_descent_speed_mps']=a.landing_descent_speed_mps
     if a.landing_alignment_mode is not None:
         settings['landing_alignment_mode']=a.landing_alignment_mode
+    if a.flight_config:
+        if a.trial!='low_multi':p.error('--flight-config in this source entry only supports task 2')
+        from uav_mission.flight_settings import apply_patch
+        try:settings=apply_patch(settings,yaml.safe_load(a.flight_config.read_text()),folder)
+        except ValueError as error:p.error(str(error))
     if a.capture_speed is not None or a.capture_lighting is not None:
         if a.trial!='high_speed_capture':p.error('Capture options are only valid for high_speed_capture')
         if a.capture_speed is not None:settings['cruise_speed']=a.capture_speed

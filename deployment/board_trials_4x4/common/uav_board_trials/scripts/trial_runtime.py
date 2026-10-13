@@ -128,6 +128,38 @@ class MultiDeliveryRuntime(LocalLandingMixin,MissionRuntime):
         return super()._schedule_from_search(now,prefer_resume,route_outcome)
 
 
+class MultiDeliveryCorridorRuntime(MissionRuntime):
+    """Low search/release transactions followed by the measured corridor tail."""
+    def __init__(self,*args,delivery_count=2,**kwargs):
+        if type(delivery_count) is not int or not 1<=delivery_count<=3:
+            raise ValueError('delivery_count must be 1..3')
+        self.delivery_count=delivery_count
+        super().__init__(*args,**kwargs)
+        if not self.core.config.post_delivery_route:
+            raise ValueError('Measured corridor route required')
+    def _begin_corridor(self,now):
+        action=self.core._post_delivery_route_action('board_multi_deliveries_complete',now,start=True)
+        return self._outcome(True,'board_multi_deliveries_complete',action)
+    def _schedule_from_search(self,now,prefer_resume,route_outcome=None):
+        if self.core.committed_slots>=self.delivery_count:
+            return self._begin_corridor(now)
+        if self.route.is_complete:
+            return self._fail_closed('board_line_finished_before_delivery_count',now)
+        return super()._schedule_from_search(now,prefer_resume,route_outcome)
+    def apply_result(self,event,now,current_xy):
+        active=self.core.active_action
+        result=super().apply_result(event,now,current_xy)
+        if (active and active.command=='APPROACH' and event.decision_seq==active.decision_seq
+                and result.accepted and event.status=='SUCCEEDED' and event.stage=='RECOVERY'
+                and self.core.committed_slots>=self.delivery_count
+                and not self.core.mission_failed
+                and self.core.phase!=MissionPhase.POST_DELIVERY_ROUTE):
+            # A 1/2-drop trial retains the production three-slot release profile.
+            # Replace the unpublished resume decision after the final recovery.
+            return self._begin_corridor(now)
+        return result
+
+
 class PriorityRevisitRuntime(FullCircleRuntime):
     """Production early exit/recovery policy, with a local trial endpoint."""
     # Group 5: finish by returning to the original takeoff point, descend to the

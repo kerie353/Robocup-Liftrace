@@ -23,8 +23,13 @@ if [[ "$folder" == 09_high_speed_capture ]]; then
   exec bash "$site_dir/../board_trials_4x4/$folder/start.sh" "$mode" --site-config "$site_dir/test_area.yaml" "$@"
 fi
 [[ $# -le 2 ]] || { echo "Use the explicit per-module start_real.sh for a separately prepared real release"; exit 2; }
+profile="$site_dir/test_area.yaml"
+# Only task 2 uses its own measured corridor/H profile.
+if [[ "$folder" == 05_low_multi ]]; then
+  profile="$site_dir/../board_trials_4x4/05_low_multi/site.yaml"
+fi
 if [[ "$mode" == flight && "$folder" != 07_memory_only ]]; then
   echo "SITE 2026-09-28: REAL release selected by operator; guarded Servo chain."
-  exec bash "$site_dir/../board_trials_4x4/$folder/start_real.sh" --site-config "$site_dir/test_area.yaml"
+  exec bash "$site_dir/../board_trials_4x4/$folder/start_real.sh" --site-config "$profile"
 fi
-exec bash "$site_dir/../board_trials_4x4/$folder/start.sh" "$mode" --site-config "$site_dir/test_area.yaml"
+exec bash "$site_dir/../board_trials_4x4/$folder/start.sh" "$mode" --site-config "$profile"

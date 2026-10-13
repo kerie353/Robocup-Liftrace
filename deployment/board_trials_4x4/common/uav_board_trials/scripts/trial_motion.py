@@ -28,7 +28,7 @@ def apply_generated_motion(runtime,control,overrides,settings,ground):
     overrides['/navigation/planner_bridge/motion_optimization']=asdict(options)
     overrides['/navigation/planner_bridge/execution/odom_twist_frame']='child'
     report['global_line_preference_weight']=weight
-    if settings.get('trial_kind') in ('corridor_landing','full_mission') and settings.get('corridor_geometry') is not None:
+    if settings.get('trial_kind') in ('corridor_landing','full_mission','low_multi_corridor') and settings.get('corridor_geometry') is not None:
         geometry=settings['corridor_geometry']
         if not isinstance(geometry,dict) or set(geometry)!={'wall_axis','wall_coordinates','entry_waypoints'}:
             raise ValueError('Measured corridor_geometry requires wall_axis, wall_coordinates and entry_waypoints')
@@ -45,7 +45,7 @@ def apply_generated_motion(runtime,control,overrides,settings,ground):
         control['uav_vision']['recovery_height']=height
         overrides['/navigation/planner_bridge/target/recovery_height']=height
         report['recovery_handoff_local_z']=height
-    if settings.get('trial_kind') in ('corridor_landing','full_mission'):
+    if settings.get('trial_kind') in ('corridor_landing','full_mission','low_multi_corridor'):
         geometry=settings.get('corridor_geometry')
         if geometry is None:
             report['post_route']='Retained: provide measured corridor_geometry before merging relays/diagonal entry'

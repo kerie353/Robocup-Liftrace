@@ -14,7 +14,7 @@ export UAV_VISION_RKNN_METADATA_PATH="$COMPETITION_ROOT/vision_ws/src/uav_vision
 competition_load_environment() {
   source /opt/ros/noetic/setup.bash
   source "$COMPETITION_ROOT/vision_ws/devel/setup.bash"
-  source "$COMPETITION_ROOT/patrol_uav_ws-patrol_planner/devel/setup.bash"
+  source "$COMPETITION_ROOT/patrol_uav_ws-patrol_planner/devel/setup.bash" --extend
   for package in uav_mission uav_vision uav_high_view camera_sdk actuator_pwm; do
     resolved_package="$(rospack find "$package")" || return 1
     case "$resolved_package" in

@@ -74,6 +74,7 @@ add_service_files(
   FILES
   Servo.srv
   ServoAction.srv
+  SetServoDuty.srv
 )
 
 ## Generate actions in the 'action' folder

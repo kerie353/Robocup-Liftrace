@@ -12,6 +12,27 @@ sys.path.insert(0,str(MISSION/'src'))
 
 
 class LowDropHeightConfig(unittest.TestCase):
+    def test_current_08_site_retains_low_drop_window_mode_two_rates_and_four_waypoints(self):
+        base = ROOT/'deployment/board_trials_4x4'
+        sys.path.insert(0, str(base/'common/uav_board_trials/scripts'))
+        from trial_config import apply_site_profile, generate
+        settings = yaml.safe_load((base/'08_full_mission/settings.yaml').read_text())
+        site = yaml.safe_load((base/'08_full_mission/site_20261007_221730.yaml').read_text())
+        apply_site_profile(settings, site)
+        self.assertEqual([settings[k] for k in ('drop_agl','release_min_agl','release_max_agl')], [.15,.10,.43])
+        self.assertEqual([settings[k] for k in ('drop_descent_mode','landing_descent_mode')], [2,2])
+        self.assertEqual([settings[k] for k in ('drop_descent_speed_mps','landing_descent_speed_mps')], [1.,1.])
+        self.assertEqual([p['y'] for p in settings['corridor_waypoints']], [1.9,1.9,1.,-3.45])
+        rig = yaml.safe_load((base/'common/uav_board_trials/config/known_rig.yaml').read_text())
+        with tempfile.TemporaryDirectory() as out:
+            ref = generate(ROOT, out, settings, (.02,-.01,.12), rig)
+            control = yaml.safe_load((Path(out)/'control.yaml').read_text())
+        drop = control['drop_system']
+        for key, agl in [('release_setpoint_height',.15),('release_min_height',.10),('height_threshold',.43)]:
+            self.assertAlmostEqual(drop[key]-ref['ground_z'], agl)
+        self.assertEqual(drop['descent']['speed_mps'], 1.)
+        self.assertEqual(control['external_landing']['descent']['speed_mps'], 1.)
+
     def entries(self):
         from uav_mission.competition_config import generate
         settings=yaml.safe_load((ROOT/'deployment/competition/field.example.yaml').read_text())

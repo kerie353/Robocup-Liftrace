@@ -32,7 +32,7 @@ class LowDropHeightConfig(unittest.TestCase):
             for fc_z in (0.,.004678211873397231,.12):
                 with self.subTest(entry=name,fc_z=fc_z):
                     original=copy.deepcopy(settings);controls=[]
-                    for lower,target,upper in ((.35,.40,.45),(.15,.20,.40)):
+                    for lower,target,upper in ((.35,.40,.45),(.15,.20,.40),(.10,.15,.43)):
                         selected=dict(settings,release_min_agl=lower,drop_agl=target,release_max_agl=upper)
                         with tempfile.TemporaryDirectory() as out:
                             ref=generate(ROOT,out,selected,(.02,-.01,fc_z),rig)
@@ -44,11 +44,11 @@ class LowDropHeightConfig(unittest.TestCase):
                         self.assertAlmostEqual(overrides['/release_permission_arbiter/min_release_altitude']-ground,lower-.08)
                         self.assertAlmostEqual(overrides['/release_permission_arbiter/max_release_altitude']-ground,upper+.02)
                         controls.append(control)
-                    self.assertEqual(controls[0],controls[1]);self.assertEqual(settings,original)
+                    self.assertTrue(all(c==controls[0] for c in controls[1:]));self.assertEqual(settings,original)
 
     def test_invalid_target_order_and_nonfinite_values_still_rejected(self):
         for name,generate,settings,rig in self.entries():
-            for lower,target,upper in ((.15,.199,.4),(.21,.2,.4),(.15,.2,.19),(.15,float('nan'),.4)):
+            for lower,target,upper in ((.10,.149,.43),(.21,.2,.4),(.15,.2,.19),(.15,float('nan'),.4)):
                 with self.subTest(entry=name,values=(lower,target,upper)),tempfile.TemporaryDirectory() as out:
                     with self.assertRaises(ValueError):
                         generate(ROOT,out,dict(settings,release_min_agl=lower,drop_agl=target,release_max_agl=upper),(.02,-.01,0.),rig)

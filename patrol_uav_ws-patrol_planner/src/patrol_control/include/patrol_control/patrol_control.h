@@ -18,6 +18,7 @@
 #include <mavros_msgs/PositionTarget.h>
 #include <nav_msgs/Odometry.h>
 #include <uav_vision/DropAlignmentFeedback.h>
+#include <patrol_control/ReleaseInvocation.h>
 
 #include <array>
 #include <map>
@@ -190,6 +191,14 @@ private:
     std::string servo_alignment_context_topic_ = "/uav_vision/alignment_target_context";
     void servoAlignmentContextCallback(const uav_vision::AlignmentTargetContext::ConstPtr& msg);
     AsyncServo async_servo_;
+    std::array<AsyncServo, 3> no_ack_servo_workers_;
+    bool drop_recover_without_ack_ = true;
+    bool drop_recovery_started_ = false;
+    uav_vision::AlignmentTargetContext servo_invocation_context_;
+    ros::Publisher release_invocation_pub_;
+    AsyncServo& servoWorkerForSlot(int slot);
+    void beginDropRecoveryWithoutAck();
+    void publishDropInvocation();
     std::uint64_t servo_action_id_ = 1;
     int servo_action_slot_ = 0;
     bool servo_action_attempted_ = false;

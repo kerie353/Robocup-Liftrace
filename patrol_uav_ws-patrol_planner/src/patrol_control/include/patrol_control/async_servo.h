@@ -84,6 +84,12 @@ public:
         return true;
     }
 
+    bool invocationStarted(std::uint64_t action, int slot) const {
+        if (!job_) return false;
+        std::lock_guard<std::mutex> lock(job_->mutex);
+        return job_->action == action && job_->slot == slot && job_->started;
+    }
+
     bool poll(std::uint64_t action, int slot, Completion* output) {
         if (!job_ || !output) return false;
         std::lock_guard<std::mutex> lock(job_->mutex);

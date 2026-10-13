@@ -213,7 +213,7 @@ def generate(root,out,settings,fc_xyz,rig):
     low=struct.unpack('f',struct.pack('f',low))[0]
     land_z, handoff_z, posctl_stability = landing_control_parameters(settings, ground, float(rig['fc_ground_clearance']))
     # 投递按FC离地高度校验；任务坐标Z可为负。H降落的原本地Z检查保留。
-    if not .20<=settings['drop_agl']<=1.0 or land_z<=0.:raise ValueError('Drop AGL or landing local-Z bounds not met')
+    if not .15<=settings['drop_agl']<=1.0 or land_z<=0.:raise ValueError('Drop AGL or landing local-Z bounds not met')
     point=lambda a,b,h:[x+a,y+b,h]
     runtime=yaml.safe_load((root/'docs/verification/fov_landing_inner_20260919/seed_2672/fast_runtime.yaml').read_text())
     m=runtime['mission'];m.update(home_xy=[x,y],landing_xy=[x+.6,y],approach_altitude=low,return_altitude=low,timeout=600. if mode=='high_view_full' else 300.,forced_return_at=510. if mode=='high_view_full' else 240.,post_delivery_route_revision='board-'+mode,

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import math
 from numbers import Integral, Real
 from typing import Dict, Optional, Tuple
+from .release_transactions import invocation_consumes_slot
 
 
 MOTION_COMMANDS = frozenset((
@@ -925,7 +926,7 @@ class PlannerMotionExecutor:
         retryable = bool(retryable)
         payload_committed = bool(payload_committed)
         late_payload_commit = (
-            payload_committed and state.terminal and state.retired and
+            payload_committed and reason == "release_ack_success" and state.terminal and state.retired and
             state.late_payload_commit_allowed and
             not state.payload_committed
         )
@@ -947,7 +948,7 @@ class PlannerMotionExecutor:
             valid = (
                 status == "PROGRESS" and stage == "RELEASE" and
                 not terminal and not retryable and
-                reason == "release_ack_success" and
+                (reason == "release_ack_success" or invocation_consumes_slot(reason, evidence_source)) and
                 not state.payload_committed
             )
             if not valid:

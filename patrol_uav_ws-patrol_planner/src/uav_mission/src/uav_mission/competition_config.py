@@ -85,7 +85,7 @@ def validate(settings, flight=False):
     if not inside([0.,0.]) or not inside(settings['staging_xy'],search):raise ValueError('invalid origin/staging')
     if not 1<=len(settings['survey_xy'])<=8 or any(not inside(p,search) for p in settings['survey_xy']):raise ValueError('survey outside search interior')
     if not inside([cover[0],cover[2]],search) or not inside([cover[1],cover[3]],search):raise ValueError('coverage outside search interior')
-    for key,lo,hi in [('low_agl',1.,1.8),('high_agl',2.,3.),('max_agl',2.,3.5),('drop_agl',.20,1.),('landing_transit_agl',.5,1.8),('landing_capture_agl',.8,2.),('cruise_speed',.1,1.2),('cruise_acceleration',.1,1.),('lane_spacing',.2,1.2)]:
+    for key,lo,hi in [('low_agl',1.,1.8),('high_agl',2.,3.),('max_agl',2.,3.5),('drop_agl',.15,1.),('landing_transit_agl',.5,1.8),('landing_capture_agl',.8,2.),('cruise_speed',.1,1.2),('cruise_acceleration',.1,1.),('lane_spacing',.2,1.2)]:
         if not finite(settings[key]) or not lo<=settings[key]<=hi:raise ValueError('invalid '+key)
     if not settings['low_agl']<settings['high_agl']<=settings['max_agl']:raise ValueError('altitude order')
     for k in ('site_confirmed','auto_start_after_arm','obstacle_columns_enabled'):

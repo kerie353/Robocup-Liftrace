@@ -29,8 +29,8 @@ struct Config {
 };
 int main(){
  for(double fc_z:{-.05,0.,.004678211873397231,.12,.30}){
-  Config c;c.drop_ground_z_=fc_z-.22;c.drop_release_min_height_=c.drop_ground_z_+.15;
-  c.drop_release_setpoint_height_=c.drop_ground_z_+.20;c.drop_height_threshold=c.drop_ground_z_+.40;
+  Config c;c.drop_ground_z_=fc_z-.22;c.drop_release_min_height_=c.drop_ground_z_+.10;
+  c.drop_release_setpoint_height_=c.drop_ground_z_+.15;c.drop_height_threshold=c.drop_ground_z_+.43;
   assert(c.accepted());
  }
  for(int lane=0;lane<3;++lane){
@@ -46,7 +46,7 @@ int main(){
   if(failure==0)c.drop_ground_z_=NAN;
   if(failure==1)c.drop_release_setpoint_height_=NAN;
   if(failure==2)c.drop_release_min_height_=c.drop_ground_z_;
-  if(failure==3)c.drop_release_setpoint_height_=c.drop_ground_z_+.199;
+  if(failure==3)c.drop_release_setpoint_height_=c.drop_ground_z_+.149;
   if(failure==4)c.drop_release_min_height_=c.drop_release_setpoint_height_+.01;
   if(failure==5)c.drop_height_threshold=c.drop_release_setpoint_height_-.01;
   if(failure==6)c.drop_height_threshold=c.drop_ground_z_+1.10001;

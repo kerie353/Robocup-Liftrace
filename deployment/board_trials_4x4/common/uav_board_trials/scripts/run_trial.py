@@ -4,7 +4,7 @@ import argparse,json,math,os,signal,subprocess,threading,time,shutil
 from pathlib import Path
 from collections import deque
 import numpy as np,yaml
-from trial_config import generate,validate_settings,apply_site_profile,TRIAL_FOLDERS,NO_DROP_MODES,mapping_profile
+from trial_config import generate,validate_settings,apply_site_profile,TRIAL_FOLDERS,NO_DROP_MODES,mapping_profile,load_trial_settings
 from trial_bag import TrialBag
 from mapping_startup import PoseAgreement,MapWarmup,VisionReadiness,startup_transport_pending
 
@@ -27,7 +27,7 @@ def main():
     if a.reference_fc is not None and not a.generate_config:
         p.error('--reference-fc requires --generate-config')
     folder=TRIAL_FOLDERS[a.trial]
-    base=a.root/'deployment/board_trials_4x4';settings=yaml.safe_load((base/folder/'settings.yaml').read_text());rig=yaml.safe_load((base/'common/uav_board_trials/config/known_rig.yaml').read_text())
+    base=a.root/'deployment/board_trials_4x4';settings=load_trial_settings(a.root,folder);rig=yaml.safe_load((base/'common/uav_board_trials/config/known_rig.yaml').read_text())
     startup=yaml.safe_load((a.mapping_startup_config or base/'common/uav_board_trials/config/mapping_startup.yaml').read_text())
     agreement=PoseAgreement(startup)
     vision_ready=VisionReadiness(startup['vision_detection_topics']+[startup['vision_targets_topic']],startup['vision_max_age'])

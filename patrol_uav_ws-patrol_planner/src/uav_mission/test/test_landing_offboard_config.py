@@ -108,7 +108,7 @@ class OffboardConfigTests(unittest.TestCase):
         for formal, names in ((False, TRIAL_FILES), (True, FORMAL_FILES)):
             for name in names:
                 base = self.settings(name, formal)
-                self.assertEqual(base.get('landing_descent_mode', 1), 2 if name == '08_full_mission' else 1)
+                self.assertEqual(base.get('landing_descent_mode', 1), 2 if name in ('03_h_landing', '08_full_mission') else 1)
                 self.assertEqual(base['landing_handoff_mode'], 'POSCTL')
                 before = copy.deepcopy(base)
                 for alignment in ('non_vh', 'vh'):
@@ -120,7 +120,7 @@ class OffboardConfigTests(unittest.TestCase):
                             landing = docs['control']['external_landing']; ground = ref['ground_z']
                             self.assertEqual(landing['handoff_mode'], 'OFFBOARD')
                             self.assertEqual(landing['alignment_mode'], alignment)
-                            self.assertEqual(landing['descent'], dict(mode=4, speed_mps=.20, max_step_dt_sec=.20))
+                            self.assertEqual(landing['descent'], dict(mode=4, speed_mps=base.get('landing_descent_speed_mps', .20), max_step_dt_sec=.20))
                             self.assertNotIn('posctl', landing)
                             self.assertAlmostEqual(docs['control']['land_height'], ground + .30)
                             self.assertAlmostEqual(landing['auto_land_height'], ground + .37)
@@ -142,7 +142,8 @@ class OffboardConfigTests(unittest.TestCase):
             validator = formal_validate if formal else validate_settings
             for mode in (1, 2, 3, 4):
                 for handoff in ('AUTO.LAND', 'POSCTL', 'OFFBOARD'):
-                    settings = dict(base, landing_descent_mode=mode, landing_handoff_mode=handoff)
+                    settings = dict(base, landing_descent_mode=mode, landing_handoff_mode=handoff,
+                                    landing_alignment_mode='non_vh')
                     with self.subTest(formal=formal, mode=mode, handoff=handoff):
                         if (mode == 4) == (handoff == 'OFFBOARD'):
                             validator(settings)
@@ -179,7 +180,7 @@ class OffboardConfigTests(unittest.TestCase):
                             setpoint_topic='/custom/touchdown'))
         _, docs = self.generate(trial_generate, settings)
         landing = docs['control']['external_landing']
-        self.assertEqual(landing['descent']['speed_mps'], .20)
+        self.assertEqual(landing['descent']['speed_mps'], settings.get('landing_descent_speed_mps', .20))
         self.assertEqual(landing['offboard_descent_speed'], .35)
         self.assertEqual(landing['offboard_touchdown_overtravel'], .03)
         self.assertEqual(landing['offboard_ground_confirm_duration'], .4)

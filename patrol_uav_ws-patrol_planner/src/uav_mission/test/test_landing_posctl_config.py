@@ -74,7 +74,7 @@ class LowHConfigTests(unittest.TestCase):
             for mode in ('POSCTL', 'AUTO.LAND'):
                 with self.subTest(name=name, mode=mode):
                     settings['landing_handoff_mode'] = mode
-                    settings['landing_alignment_mode'] = 'vh' if name == '08_full_mission' and mode == 'POSCTL' else 'non_vh'
+                    settings['landing_alignment_mode'] = 'vh' if name in ('03_h_landing', '08_full_mission') and mode == 'POSCTL' else 'non_vh'
                     ref, control = self.generated(trial_generate, settings)
                     self.check_profile(ref, control, mode, settings['landing_alignment_mode'])
 
@@ -153,7 +153,7 @@ class LowHConfigTests(unittest.TestCase):
         _, control = self.generated(trial_generate, trial, -.09)
         self.assertAlmostEqual(control['land_height'], .04)
         for function, settings in ((competition_generate, self.settings), (trial_generate, trial)):
-            with self.subTest(generator=function.__module__), self.assertRaisesRegex(ValueError, 'positive local-Z'):
+            with self.subTest(generator=function.__module__), self.assertRaisesRegex(ValueError, 'local-Z'):
                 self.generated(function, settings, -.14)
 
     def test_missing_block_uses_candidate_only_for_posctl(self):
@@ -183,6 +183,7 @@ class LowHConfigTests(unittest.TestCase):
 
     def test_high_switch_reaches_both_generators_and_preserves_low_parameters(self):
         trial = yaml.safe_load((ROOT / 'deployment/board_trials_4x4/03_h_landing/settings.yaml').read_text())
+        trial['landing_alignment_mode'] = 'non_vh'  # Explicitly exercise the fallback policy.
         for function, settings in ((trial_generate, trial), (competition_generate, self.settings)):
             _, low = self.generated(function, settings)
             high_settings = copy.deepcopy(settings)

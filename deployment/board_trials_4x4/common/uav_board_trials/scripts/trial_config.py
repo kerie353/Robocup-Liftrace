@@ -16,6 +16,28 @@ HIGH_MODES = ('high_view', 'high_priority', 'memory_only', 'high_view_full', 'hi
 H_MODES = ('landing', 'high_view_full', 'low_multi_full')
 NO_DROP_MODES = ('landing', 'memory_only', 'high_speed_capture')
 
+def load_trial_settings(root, folder):
+    """03 exercises the current 08 H policy, retaining its own mission/geometry.
+
+    Resolve before measured-site and explicit CLI overrides. Optional H blocks
+    removed from 08 must not survive as stale values in the standalone template.
+    """
+    base = Path(root) / 'deployment/board_trials_4x4'
+    settings = yaml.safe_load((base / folder / 'settings.yaml').read_text())
+    if folder != '03_h_landing':
+        return settings
+    full = yaml.safe_load((base / '08_full_mission/settings.yaml').read_text())
+    if not isinstance(settings, dict) or not isinstance(full, dict):
+        raise ValueError('H/full mission settings must be mappings')
+    if any(key not in full for key in ('landing_transit_agl', 'landing_capture_agl')):
+        raise ValueError('08 H policy requires transit and capture heights')
+    validate_landing_posctl(full)
+    def policy(key):
+        return key.startswith('landing_') and key != 'landing_xy'
+    settings = {key: value for key, value in settings.items() if not policy(key)}
+    settings.update({key: copy.deepcopy(value) for key, value in full.items() if policy(key)})
+    return settings
+
 def apply_site_profile(settings, profile):
     """Merge measured site geometry without changing the module's mission kind."""
     allowed={'flight_area','search_line_x','compressed_image_topic','high_agl','max_agl',

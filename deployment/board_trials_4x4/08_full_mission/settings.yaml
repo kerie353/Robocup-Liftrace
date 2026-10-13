@@ -2,16 +2,16 @@ mode: high_view_full
 low_agl: 1.4
 high_agl: 2.6
 # 投递下降模式：1=原XYZ；2=冻结XY/Z轨迹；3=零水平速度；4=冻结XY/VZ加速制动。
-drop_descent_mode: 1
+drop_descent_mode: 2
 drop_horizontal_compensation_mode: 2  # 1=双XY<=4cm且速度<=0.1m/s连续1s；2=当前补偿达标即下降
-drop_descent_speed_mps: 0.20
+drop_descent_speed_mps: 1.0
 drop_descent_mode4_speed_mps: 0.60  # 模式4最高向下速度，ENU指令为负值
 drop_descent_acceleration_mps2: 0.60
 drop_descent_braking_mps2: 0.60
 drop_descent_hold_tolerance_m: 0.015  # 距终点1.5cm切回Z位置保持；非释放门槛
-drop_agl: 0.35
-release_min_agl: 0.3
-release_max_agl: 0.4
+drop_agl: 0.20
+release_min_agl: 0.15
+release_max_agl: 0.40
 landing_transit_agl: 1.0
 landing_capture_agl: 1.2
 landing_xy: null
@@ -34,10 +34,13 @@ landing_handoff_mode: POSCTL
 landing_alignment_mode: vh
 # 1: XYZ; 2: frozen H XY + Z ramp; 3: VX=VY=0 + Z ramp.
 landing_descent_mode: 2
-landing_descent_speed_mps: 0.20
+landing_descent_speed_mps: 1.0
 
 # Per-motion action budget, including merged corridor segments (seconds).
 motion_action_timeout: 60.0
+# 普通固定航点：false=位置到达立即推进；true=位置连续达标0.3秒；两者均不检查速度。
+# 不改变动态投递接近、视觉对准、恢复及H降落交接判定。
+ordinary_waypoint_dwell_enabled: false
 
 # 来源 073c8f19：低位 H POSCTL 停稳参数；现场其他参数保持本分支值。
 landing_posctl:

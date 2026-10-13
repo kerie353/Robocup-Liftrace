@@ -55,14 +55,17 @@ class DropHeightConfigTests(unittest.TestCase):
         self.assertAlmostEqual(overrides['/release_permission_arbiter/max_release_altitude']-ground, .47)
         self.assertEqual(settings, original)
 
-    def test_positive_setpoint_does_not_hide_invalid_local_release_floor(self):
+    def test_shifted_origin_preserves_valid_agl_release_floor(self):
         settings = yaml.safe_load((ROOT/'deployment/competition/field_20261007_validated.yaml').read_text())
         settings.update(drop_agl=.40, release_min_agl=.35, release_max_agl=.45)
         validate(settings, flight=True)
         rig = yaml.safe_load((ROOT/'patrol_uav_ws-patrol_planner/src/uav_mission/config/competition/known_rig.yaml').read_text())
-        # ground=-.31: target local Z=.09 is valid but release floor local Z=.04 is not.
-        with tempfile.TemporaryDirectory() as path, self.assertRaisesRegex(ValueError, 'positive local-Z'):
-            generate(ROOT, path, settings, (0, 0, -.09), rig)
+        # A shifted local origin must not invalidate a positive AGL floor.
+        with tempfile.TemporaryDirectory() as path:
+            ref = generate(ROOT, path, settings, (0, 0, -.09), rig)
+            control = yaml.safe_load((Path(path)/'control.yaml').read_text())['drop_system']
+        self.assertAlmostEqual(control['release_min_height'], .04)
+        self.assertAlmostEqual(control['release_min_height']-ref['ground_z'], .35)
 
 
 
@@ -79,9 +82,12 @@ class DropHeightConfigTests(unittest.TestCase):
             self.assertAlmostEqual(control[key]-ref['ground_z'], agl)
         self.assertAlmostEqual(overrides['/release_permission_arbiter/min_release_altitude']-ref['ground_z'], .20)
         self.assertAlmostEqual(overrides['/release_permission_arbiter/max_release_altitude']-ref['ground_z'], .37)
-        # Lowering AGL must retain the controller's positive local-Z guard.
-        with tempfile.TemporaryDirectory() as path, self.assertRaisesRegex(ValueError, 'positive local-Z'):
-            generate(ROOT, path, settings, (0, 0, -.02), rig)
+        # Positive AGL remains valid even if the local floor is below .05m.
+        with tempfile.TemporaryDirectory() as path:
+            ref = generate(ROOT, path, settings, (0, 0, -.02), rig)
+            control = yaml.safe_load((Path(path)/'control.yaml').read_text())['drop_system']
+        self.assertAlmostEqual(control['release_min_height'], .04)
+        self.assertAlmostEqual(control['release_setpoint_height']-ref['ground_z'], .30)
 
     def test_five_delivery_defaults_generate_requested_window(self):
         previous_path = sys.path[:]
@@ -93,7 +99,7 @@ class DropHeightConfigTests(unittest.TestCase):
         for folder in ('01_visual_interrupt', '02_high_view_revisit', '05_low_multi', '06_high_priority', '08_full_mission'):
             with self.subTest(folder=folder):
                 settings = yaml.safe_load((base/folder/'settings.yaml').read_text())
-                expected = [.35,.30,.40] if folder == '08_full_mission' else [.30,.28,.35]
+                expected = [.20,.15,.40] if folder == '08_full_mission' else [.30,.28,.35]
                 self.assertEqual([settings[k] for k in ('drop_agl','release_min_agl','release_max_agl')], expected)
                 if folder == '08_full_mission':
                     # Geometry is an offline fixture, never a deployed replacement.

@@ -2499,6 +2499,18 @@ void LLController::load_params() {
     landing_pad_radius_m_ = nh_.param("uav_vision/landing_pad_radius_m", 0.3);
     enable_selected_tank_interrupt_ = nh_.param("uav_vision/enable_tank_interrupt", false);
 
+    // Calibrated external delivery heights are relative to ground_z, not
+    // the arbitrary local origin. Preserve positive-Z limits for legacy lanes.
+    const bool calibrated_drop_z = external_mission_mode_ &&
+        compensated_alignment_enabled_ && drop_metric_scale_enabled_;
+    const bool invalid_drop_height_bounds = calibrated_drop_z
+        ? (!std::isfinite(drop_ground_z_) ||
+           drop_release_min_height_ - drop_ground_z_ <= 0.0 ||
+           drop_release_setpoint_height_ - drop_ground_z_ < 0.20 - 1e-9 ||
+           drop_height_threshold - drop_ground_z_ > 1.1 + 1e-9)
+        : (drop_height_threshold <= 0.0 || drop_height_threshold > 1.0 ||
+           drop_release_setpoint_height_ <= 0.05 || drop_release_min_height_ <= 0.05);
+
     if (!std::isfinite(drop_height_threshold) ||
         !std::isfinite(drop_position_threshold_) ||
         !std::isfinite(drop_release_setpoint_height_) ||
@@ -2506,10 +2518,8 @@ void LLController::load_params() {
         !std::isfinite(external_recovery_height_) ||
         !std::isfinite(external_standard_recovery_setpoint_height_) ||
         !std::isfinite(external_cross_recovery_setpoint_height_) ||
-        drop_height_threshold <= 0.0 || drop_height_threshold > 1.0 ||
+        invalid_drop_height_bounds ||
         drop_position_threshold_ <= 0.0 || drop_position_threshold_ > 1.0 ||
-        drop_release_setpoint_height_ <= 0.05 ||
-        drop_release_min_height_ <= 0.05 ||
         drop_release_min_height_ > drop_release_setpoint_height_ ||
         drop_release_setpoint_height_ > drop_height_threshold ||
         external_recovery_height_ <= drop_height_threshold ||

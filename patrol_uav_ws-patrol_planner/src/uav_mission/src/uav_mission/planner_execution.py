@@ -244,6 +244,7 @@ class PlannerMotionConfig:
     # Opt-in list of ordinary waypoint XYZs; target APPROACH never uses this policy.
     position_only_arrival_goals: Tuple[Tuple[float, float, float], ...] = ()
     position_only_arrival_dwell_ns: int = 300_000_000
+    position_only_arrival_dwell_enabled: bool = False
     odom_max_age_ns: int = 200_000_000
     return_yaw_tolerance_rad: float = math.pi
 
@@ -296,6 +297,8 @@ class PlannerMotionConfig:
         object.__setattr__(self, "position_only_arrival_goals", tuple(ordinary_goals))
         object.__setattr__(self, "position_only_arrival_dwell_ns", _integer(
             "position_only_arrival_dwell_ns", self.position_only_arrival_dwell_ns, 1))
+        if type(self.position_only_arrival_dwell_enabled) is not bool:
+            raise ValueError("position_only_arrival_dwell_enabled must be boolean")
         object.__setattr__(self, "odom_max_age_ns", _integer(
             "odom_max_age_ns", self.odom_max_age_ns, 1))
         yaw_tolerance = _finite("return_yaw_tolerance_rad", self.return_yaw_tolerance_rad)
@@ -1108,6 +1111,9 @@ class PlannerMotionExecutor:
             if abs(yaw_error) > self.config.return_yaw_tolerance_rad:
                 self._reset_dwell(state)
                 return self._outcome(True, "arrival_yaw_not_met")
+
+        if position_only and not self.config.position_only_arrival_dwell_enabled:
+            return self._complete_arrival(state, int(now_ns))
 
         if (state.last_qualified_odom_ns and
                 sample.stamp_ns - state.last_qualified_odom_ns >

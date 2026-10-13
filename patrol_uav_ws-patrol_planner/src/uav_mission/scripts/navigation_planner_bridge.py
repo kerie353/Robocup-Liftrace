@@ -306,6 +306,8 @@ class NavigationPlannerBridge:
             position_only_arrival_dwell_ns=_seconds_to_ns(
                 "position_only_arrival_dwell", rospy.get_param(
                     "~execution/position_only_arrival_dwell", 0.30)),
+            position_only_arrival_dwell_enabled=rospy.get_param(
+                "~execution/position_only_arrival_dwell_enabled", False),
             odom_max_age_ns=_seconds_to_ns(
                 "odom_max_age",
                 rospy.get_param("~execution/odom_max_age", 0.50)),

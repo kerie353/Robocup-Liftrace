@@ -257,6 +257,7 @@ install(DIRECTORY launch config
 
 if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_drop_height_config.py)
+  catkin_add_nosetests(test/test_low_drop_height_config.py)
   catkin_add_nosetests(test/test_drop_descent_modes.py)
   catkin_add_nosetests(test/test_drop_velocity_descent_config.py)
   catkin_add_nosetests(test/test_competition_release.py)

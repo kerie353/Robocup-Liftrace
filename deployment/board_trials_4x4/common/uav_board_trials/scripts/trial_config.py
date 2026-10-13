@@ -119,6 +119,11 @@ def validate_settings(settings):
     if not isinstance(raw,str) or not raw.startswith('/') or raw in ('/Servo','/board_trials/Servo','/board_trials/mock_servo'):
         raise ValueError('raw_servo_service must be an independent absolute hardware service')
     profile=settings.get('speed_profile','limited')
+    if 'ordinary_waypoint_dwell_enabled' in settings:
+        if settings.get('trial_kind') != 'full_mission':
+            raise ValueError('ordinary waypoint dwell switch only applies to 08 full mission')
+        if type(settings['ordinary_waypoint_dwell_enabled']) is not bool:
+            raise ValueError('ordinary_waypoint_dwell_enabled must be boolean')
     if profile not in ('limited','competition') or (profile=='competition' and settings.get('trial_kind')!='full_mission'):
         raise ValueError('Competition speed profile only applies to 08 full mission')
     fast=settings['mode']=='high_speed_capture' or profile=='competition'
@@ -207,8 +212,8 @@ def generate(root,out,settings,fc_xyz,rig):
     # exactly representable shared value so equality cannot fail its guard.
     low=struct.unpack('f',struct.pack('f',low))[0]
     land_z, handoff_z, posctl_stability = landing_control_parameters(settings, ground, float(rig['fc_ground_clearance']))
-    # 投递仍需本地 Z > 0.05m；降落只需 > 0，与控制器参数校验一致。
-    if not .28<=settings['drop_agl']<=1.0 or drop<=.05 or ground+release_min<=.05 or land_z<=0.:raise ValueError('Legacy positive local-Z bounds not met')
+    # 投递按FC离地高度校验；任务坐标Z可为负。H降落的原本地Z检查保留。
+    if not .20<=settings['drop_agl']<=1.0 or land_z<=0.:raise ValueError('Drop AGL or landing local-Z bounds not met')
     point=lambda a,b,h:[x+a,y+b,h]
     runtime=yaml.safe_load((root/'docs/verification/fov_landing_inner_20260919/seed_2672/fast_runtime.yaml').read_text())
     m=runtime['mission'];m.update(home_xy=[x,y],landing_xy=[x+.6,y],approach_altitude=low,return_altitude=low,timeout=600. if mode=='high_view_full' else 300.,forced_return_at=510. if mode=='high_view_full' else 240.,post_delivery_route_revision='board-'+mode,
@@ -303,6 +308,7 @@ def generate(root,out,settings,fc_xyz,rig):
         # Clear a previous module 08 whitelist when reusing the ROS parameter server.
         '/navigation/planner_bridge/execution/position_only_arrival_goals':[],
         '/navigation/planner_bridge/execution/position_only_arrival_dwell':.3,
+        '/navigation/planner_bridge/execution/position_only_arrival_dwell_enabled':False,
         '/navigation/planner_bridge/execution/initial_plan_timeout':12.,
         '/navigation/planner_bridge/execution/search_initial_plan_timeout':12.,
         '/fast_planner_node/fsm/liveness_enabled':True,'/fast_planner_node/fsm/server_hold_replan_enabled':True,
@@ -345,6 +351,7 @@ def generate(root,out,settings,fc_xyz,rig):
         ordinary_goals.extend(copy.deepcopy(runtime['mission']['post_delivery_route']))
         overrides['/navigation/planner_bridge/execution/position_only_arrival_goals']=ordinary_goals
         overrides['/navigation/planner_bridge/execution/position_only_arrival_dwell']=.3
+        overrides['/navigation/planner_bridge/execution/position_only_arrival_dwell_enabled']=settings.get('ordinary_waypoint_dwell_enabled',False)
     (out/'motion_profile.json').write_text(json.dumps(motion_report,indent=2))
     (out/'terminal_hover.yaml').write_text(yaml.safe_dump(dict(frame='camera_init',ground_z=ground,hover_agl=settings.get('terminal_hover_agl',.3),max_agl=settings.get('max_agl',2.9),descent_speed=.15)))
     for name,data in [('runtime.yaml',runtime),('control.yaml',control),('overrides.yaml',overrides),('auto_land.yaml',dict(frame='camera_init',landing_xy=[x+.6,y],cruise_z=low,route_revision='board-'+mode))]:

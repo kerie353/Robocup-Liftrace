@@ -13,6 +13,7 @@ def main():
     p.add_argument('--resume-survey',choices=('on','off'),help='Override interrupted survey resume for priority/full mission; omit to inherit settings')
     p.add_argument('--landing-alignment-mode',choices=('non_vh','vh'),help='H landing only: non_vh keeps ten-frame capture; vh aligns for 1s; descent policy is selected separately')
     p.add_argument('--speed-profile',choices=('limited','competition'),help='08 only: same measured field, explicit planning/following speeds')
+    p.add_argument('--ordinary-waypoint-dwell',choices=('on','off'),help='08 fixed waypoints: on checks position for 0.3s; off advances at position arrival (default)')
     p.add_argument('--generate-config',type=Path,help='With --check-config: write configuration only, never start ROS')
     p.add_argument('--reference-fc',type=float,nargs=3,metavar=('X','Y','Z'),help='Stationary reference for offline generation')
     p.add_argument('--landing-descent-mode',type=int,choices=(1,2,3,4),help='H descent: 1 XYZ, 2 frozen XY + Z ramp, 3 zero XY velocity + Z ramp, 4 OFFBOARD touchdown (requires OFFBOARD handoff)')
@@ -40,6 +41,9 @@ def main():
         from trial_speed_profiles import apply_speed_profile
         try:apply_speed_profile(a.root,settings,a.trial,a.speed_profile)
         except ValueError as error:p.error(str(error))
+    if a.ordinary_waypoint_dwell is not None:
+        if a.trial != 'full_mission':p.error('--ordinary-waypoint-dwell only applies to 08 full mission')
+        settings['ordinary_waypoint_dwell_enabled']=a.ordinary_waypoint_dwell=='on'
     if a.landing_config:
         if settings['mode'] not in ('landing','high_view_full'):p.error('--landing-config only applies to visual H landing')
         from uav_mission.landing_offboard_config import apply_landing_override

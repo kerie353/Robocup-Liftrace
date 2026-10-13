@@ -14,9 +14,10 @@ def drop_descent_parameters(settings):
     speed = settings.get('drop_descent_speed_mps', 0.20)
     if type(mode) is not int or mode not in (1, 2, 3, 4):
         raise ValueError('drop_descent_mode must be 1, 2, 3 or 4')
+    max_speed = 3.0 if mode == 2 else 1.0
     if (isinstance(speed, bool) or not isinstance(speed, (int, float)) or
-            not math.isfinite(speed) or not 0.0 < speed <= 1.0):
-        raise ValueError('drop_descent_speed_mps must be in (0, 1]')
+            not math.isfinite(speed) or not 0.0 < speed <= max_speed):
+        raise ValueError('drop_descent_speed_mps must be in (0, %g] for mode %d' % (max_speed, mode))
     result = dict(mode=mode, speed_mps=float(speed), max_step_dt_sec=0.20,
                   zero_velocity_setpoint_topic='/navigation/drop_setpoint_vertical',
                   velocity_setpoint_topic='/navigation/drop_setpoint_velocity')

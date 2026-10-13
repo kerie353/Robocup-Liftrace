@@ -21,7 +21,7 @@ struct DropDescentConfig {
              std::isfinite(braking_mps2) && braking_mps2 > 0.0 && braking_mps2 <= 2.0 &&
              std::isfinite(hold_tolerance_m) && hold_tolerance_m > 0.0 && hold_tolerance_m <= 0.03);
         return velocity_valid && mode >= 1 && mode <= 4 && std::isfinite(speed_mps) &&
-            speed_mps > 0.0 && speed_mps <= 1.0 && std::isfinite(max_step_dt_sec) &&
+            speed_mps > 0.0 && speed_mps <= (mode == 2 ? 3.0 : 1.0) && std::isfinite(max_step_dt_sec) &&
             max_step_dt_sec > 0.0 && max_step_dt_sec <= 0.5;
     }
 };

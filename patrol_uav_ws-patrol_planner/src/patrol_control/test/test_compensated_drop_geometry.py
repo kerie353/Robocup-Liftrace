@@ -582,6 +582,14 @@ int main(int argc,char**argv){
    for(int i=1;i<=60;++i)profile.update(101.2+i*.1);
    close(profile.height(),.4);profile.reset();assert(!profile.active());
    config.mode=5;assert(!config.valid());config.mode=3;config.speed_mps=0;assert(!config.valid());
+  }else if(name=="mode_two_three_mps"){
+   DropDescentConfig config;config.mode=2;config.speed_mps=3.;assert(config.valid());
+   DropDescentProfile profile(config);assert(profile.start(1.4,.4,100));
+   close(profile.update(100.1),1.1);close(profile.update(100.2),.8);
+   close(profile.update(100.3),.5);close(profile.update(100.4),.4);
+   close(profile.update(100.5),.4); // terminal floor survives a fast ramp
+   config.speed_mps=3.000001;assert(!config.valid());config.speed_mps=1.01;
+   for(int mode:{1,3,4}){config.mode=mode;assert(!config.valid());}
   }else if(name=="velocity_descent_profile"){
    DropDescentConfig config;config.mode=4;DropDescentProfile profile(config);
    assert(config.valid()&&profile.start(1.4,.4,100));
@@ -1214,6 +1222,7 @@ class CompensatedDropGeometryTests(unittest.TestCase):
     def test_three_descent_modes_keep_entry_gate_and_reset_transaction(self): self.run_case('serial_descent_modes')
     def test_independent_descent_rate_pause_floor_and_invalid_config(self): self.run_case('serial_descent_profile')
     def test_mode_four_acceleration_braking_and_latched_terminal_hold(self): self.run_case('velocity_descent_profile')
+    def test_mode_two_three_mps_slope_floor_and_other_mode_limits(self): self.run_case('mode_two_three_mps')
     def test_mode_four_missed_feedback_pause_restart_and_invalid_config(self): self.run_case('velocity_descent_pause')
     def test_mode_four_frozen_xy_release_while_descending_and_position_hold(self): self.run_case('velocity_descent_command')
     def test_height_only_circle_and_cross_release_after_xy_rebound(self): self.run_case('height_only_rpc')

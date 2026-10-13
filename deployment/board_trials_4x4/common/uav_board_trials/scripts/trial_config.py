@@ -300,6 +300,9 @@ def generate(root,out,settings,fc_xyz,rig):
         '/external_planner_start_max_distance':(max(.75,min(float(settings['cruise_speed']),1.0)+.25) if mode=='high_speed_capture' else .75),
         '/external_planner_max_command_z':ground+settings.get('max_agl',2.9),'/navigation/planner_bridge/execution/max_goal_z':ground+settings.get('max_agl',2.9),
         '/navigation/planner_bridge/execution/arrival_position_tolerance':.12,'/navigation/planner_bridge/execution/arrival_dwell':.8,
+        # Clear a previous module 08 whitelist when reusing the ROS parameter server.
+        '/navigation/planner_bridge/execution/position_only_arrival_goals':[],
+        '/navigation/planner_bridge/execution/position_only_arrival_dwell':.3,
         '/navigation/planner_bridge/execution/initial_plan_timeout':12.,
         '/navigation/planner_bridge/execution/search_initial_plan_timeout':12.,
         '/fast_planner_node/fsm/liveness_enabled':True,'/fast_planner_node/fsm/server_hold_replan_enabled':True,
@@ -334,6 +337,14 @@ def generate(root,out,settings,fc_xyz,rig):
     overrides.update(recovery_parameters({},ground))
     from trial_motion import apply_generated_motion
     motion_report=apply_generated_motion(runtime,control,overrides,settings,ground)
+    if settings.get('trial_kind') == 'full_mission':
+        # Module 08 fixed survey/staging/post-delivery goals only. Dynamic revisit,
+        # APPROACH, recovery and landing handoff keep their existing conditions.
+        ordinary_goals=[point(*area['staging_xy'],low),point(*area['staging_xy'],high)]
+        ordinary_goals.extend(point(a,b,high) for a,b in area['survey_xy'])
+        ordinary_goals.extend(copy.deepcopy(runtime['mission']['post_delivery_route']))
+        overrides['/navigation/planner_bridge/execution/position_only_arrival_goals']=ordinary_goals
+        overrides['/navigation/planner_bridge/execution/position_only_arrival_dwell']=.3
     (out/'motion_profile.json').write_text(json.dumps(motion_report,indent=2))
     (out/'terminal_hover.yaml').write_text(yaml.safe_dump(dict(frame='camera_init',ground_z=ground,hover_agl=settings.get('terminal_hover_agl',.3),max_agl=settings.get('max_agl',2.9),descent_speed=.15)))
     for name,data in [('runtime.yaml',runtime),('control.yaml',control),('overrides.yaml',overrides),('auto_land.yaml',dict(frame='camera_init',landing_xy=[x+.6,y],cruise_z=low,route_revision='board-'+mode))]:

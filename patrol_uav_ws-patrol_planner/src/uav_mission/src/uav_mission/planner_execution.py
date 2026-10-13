@@ -241,6 +241,9 @@ class PlannerMotionConfig:
     approach_arrival_distance_m: float = 0.35
     arrival_speed_mps: float = 0.20
     arrival_dwell_ns: int = 500_000_000
+    # Opt-in list of ordinary waypoint XYZs; target APPROACH never uses this policy.
+    position_only_arrival_goals: Tuple[Tuple[float, float, float], ...] = ()
+    position_only_arrival_dwell_ns: int = 300_000_000
     odom_max_age_ns: int = 200_000_000
     return_yaw_tolerance_rad: float = math.pi
 
@@ -285,6 +288,14 @@ class PlannerMotionConfig:
         object.__setattr__(self, "arrival_speed_mps", speed)
         object.__setattr__(self, "arrival_dwell_ns", _integer(
             "arrival_dwell_ns", self.arrival_dwell_ns, 1))
+        ordinary_goals = []
+        for point in self.position_only_arrival_goals:
+            if len(point) != 3:
+                raise ValueError("position-only arrival goal must contain XYZ")
+            ordinary_goals.append(tuple(_finite("position_only_arrival_goal", v) for v in point))
+        object.__setattr__(self, "position_only_arrival_goals", tuple(ordinary_goals))
+        object.__setattr__(self, "position_only_arrival_dwell_ns", _integer(
+            "position_only_arrival_dwell_ns", self.position_only_arrival_dwell_ns, 1))
         object.__setattr__(self, "odom_max_age_ns", _integer(
             "odom_max_age_ns", self.odom_max_age_ns, 1))
         yaw_tolerance = _finite("return_yaw_tolerance_rad", self.return_yaw_tolerance_rad)
@@ -1072,13 +1083,20 @@ class PlannerMotionExecutor:
             (sample.z - goal.z) ** 2
         )
         speed = math.sqrt(sample.vx ** 2 + sample.vy ** 2 + sample.vz ** 2)
+        requested = state.decision.goal
+        position_only = (
+            state.decision.command in ("SEARCH", "RESUME", "RETURN_HOME") and
+            requested is not None and any(
+                max(abs(a-b) for a, b in zip(
+                    (requested.x, requested.y, requested.z), point)) <= 1e-6
+                for point in self.config.position_only_arrival_goals))
         arrival_distance = (
             self.config.approach_arrival_distance_m
             if state.decision.command == "APPROACH"
             else self.config.arrival_distance_m
         )
         if (distance > arrival_distance or
-                speed > self.config.arrival_speed_mps):
+                (not position_only and speed > self.config.arrival_speed_mps)):
             self._reset_dwell(state)
             return self._outcome(True, "arrival_threshold_not_met")
 
@@ -1098,8 +1116,9 @@ class PlannerMotionExecutor:
         if state.dwell_start_ns == 0:
             state.dwell_start_ns = sample.stamp_ns
         state.last_qualified_odom_ns = sample.stamp_ns
-        if (sample.stamp_ns - state.dwell_start_ns <
-                self.config.arrival_dwell_ns):
+        dwell_ns = (self.config.position_only_arrival_dwell_ns if position_only
+                    else self.config.arrival_dwell_ns)
+        if sample.stamp_ns - state.dwell_start_ns < dwell_ns:
             return self._outcome(True, "arrival_dwell_pending")
         return self._complete_arrival(state, int(now_ns))
 

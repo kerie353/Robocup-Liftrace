@@ -54,7 +54,18 @@ class NavigationFollowingConfig(unittest.TestCase):
                 s = yaml.safe_load((BASE / folder / 'settings.yaml').read_text())
                 if trial in ('corridor_landing', 'full_mission'):
                     apply_site_profile(s, yaml.safe_load((BASE / '08_full_mission/site_20261007_221730.yaml').read_text()))
-                self.assert_generated(generate, s, rig)
+                r, c, o = self.assert_generated(generate, s, rig)
+                key='/navigation/planner_bridge/execution/position_only_arrival_goals'
+                if trial == 'full_mission':
+                    self.assertEqual(o[key][:2],
+                        [[.8+.01,-.01,c['align_height']],[.8+.01,-.01,1.73]])
+                    self.assertEqual(o[key][2:],
+                        [[x+.01,y-.01,1.73] for x,y in s['flight_area']['survey_xy']] +
+                        r['mission']['post_delivery_route'])
+                    self.assertEqual(o['/navigation/planner_bridge/execution/position_only_arrival_dwell'],.3)
+                    self.assertEqual(o['/navigation/planner_bridge/execution/arrival_dwell'],.8)
+                else:
+                    self.assertEqual(o[key],[])
 
     def test_formal_and_archived_inputs_generate_current_policy(self):
         rig = yaml.safe_load((MISSION / 'config/competition/known_rig.yaml').read_text())

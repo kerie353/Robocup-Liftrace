@@ -24,7 +24,7 @@ class VelocityDescentGeneration(unittest.TestCase):
                     control = yaml.safe_load((Path(out)/'control.yaml').read_text())
                 cfg = control['drop_system']['descent']
                 self.assertEqual(cfg['mode'], mode)
-                self.assertEqual(cfg['speed_mps'], .20)
+                self.assertEqual(cfg['speed_mps'], settings.get('drop_descent_speed_mps', .20))
                 self.assertEqual(cfg['velocity_speed_mps'], .60)
                 self.assertEqual(cfg['acceleration_mps2'], .60)
                 self.assertEqual(cfg['braking_mps2'], .60)

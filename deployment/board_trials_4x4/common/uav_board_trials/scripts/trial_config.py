@@ -272,6 +272,10 @@ def generate(root,out,settings,fc_xyz,rig):
     from uav_mission.navigation_following_config import navigation_following_profile
     runtime['following_speed_profile']=navigation_following_profile(settings.get('following_speed_profile'))
     if mode=='landing':
+        # 03 starts directly near H: use 08's final near-H following distance
+        # even on route leg zero. The manager otherwise rewrites it to 1.0 m,
+        # beyond this standalone trial's 0.75 m planner admission limit.
+        runtime['following_speed_profile']['cruise_lead_m']=runtime['following_speed_profile']['corridor_lead_m']
         hx,hy=settings['landing_xy'];transit=ground+settings['landing_transit_agl']
         m.update(landing_xy=[x+hx,y+hy],return_altitude=capture,post_delivery_route=[point(max(.6,hx-.7),hy,transit),point(hx,hy,transit),point(hx,hy,capture)])
     if settings.get('trial_kind') in ('corridor_landing','full_mission','low_multi_corridor'):

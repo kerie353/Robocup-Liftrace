@@ -21,6 +21,7 @@ FILES = (
     'competition_templates/deployment/competition/candidates/rectangle_motion.yaml',
     'competition_templates/deployment/competition/candidates/snake3_motion.yaml',
     'competition_templates/deployment/competition/candidates/snake_motion.yaml',
+    'competition_templates/deployment/competition/field_10x10_default.yaml',
     'competition_templates/deployment/competition/field.example.yaml',
     'competition_templates/deployment/competition/field_20261007_validated.yaml',
 

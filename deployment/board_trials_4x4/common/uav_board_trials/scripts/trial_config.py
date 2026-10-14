@@ -47,6 +47,8 @@ def apply_site_profile(settings, profile):
         allowed.update(('landing_xy', 'landing_handoff_mode', 'landing_handoff_status_topic', 'landing_posctl', 'landing_alignment_mode', 'landing_descent_mode', 'landing_descent_speed_mps', 'landing_offboard'))
     if settings.get('mode') in ('low_multi','low_multi_full'):
         allowed.update(('search_waypoints_xy', 'landing_xy'))
+    if settings.get('trial_kind') in ('full_mission','low_multi_corridor'):
+        allowed.add('low_agl')
     if settings.get('trial_kind') in ('corridor_landing','full_mission','low_multi_corridor'):
         allowed.update(('corridor_waypoints','corridor_geometry'))
     if not isinstance(profile,dict) or set(profile)-allowed:

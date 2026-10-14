@@ -56,7 +56,7 @@ def main():
     if a.landing_alignment_mode is not None:
         settings['landing_alignment_mode']=a.landing_alignment_mode
     if a.flight_config:
-        if a.trial!='low_multi':p.error('--flight-config in this source entry only supports task 2')
+        if a.trial not in ('low_multi','full_mission'):p.error('--flight-config only supports task 2 and module 08')
         from uav_mission.flight_settings import apply_patch
         try:settings=apply_patch(settings,yaml.safe_load(a.flight_config.read_text()),folder)
         except ValueError as error:p.error(str(error))

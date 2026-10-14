@@ -5,6 +5,14 @@ set -euo pipefail
 # Configuration only: output is disabled; never use this script as a loaded-mechanism reset.
 model=$(tr -d '\0' < /proc/device-tree/model)
 [[ "$model" == *"OPi 5 Plus"* || "$model" == *"Orange Pi 5 Plus"* ]] || { echo 'Orange Pi 5 Plus required'; exit 2; }
+# One permanent inode shared with raw/debug services. Never unlink/replace it.
+lock_path=/run/lock/liftrace-servo.lock
+[[ ! -L "$lock_path" ]] || { echo 'Refusing symlink PWM lock'; exit 2; }
+exec {servo_lock_fd}>>"$lock_path"
+flock -n "$servo_lock_fd" || { echo 'PWM occupied by raw/debug/initialization; no PWM changes'; exit 2; }
+owner=${SUDO_USER:-root}
+chown "$owner" "$lock_path"
+chmod 600 "$lock_path"
 chips=()
 for dev in febf0000.pwm febf0020.pwm febf0010.pwm; do
   found=''

@@ -7,6 +7,7 @@
  * Default startup is read-only; /legacy/Servo_raw is advertised only after all checks.
  */
 #include "actuator_pwm/PWMController.h"
+#include "actuator_pwm/HardwareLock.h"
 #include "patrol_control/Servo.h"
 #include <ros/ros.h>
 
@@ -53,23 +54,25 @@ bool servocallback(patrol_control::Servo::Request &req, patrol_control::Servo::R
     return true;
 }
 int main(int argc,char** argv) {
-    ros::init(argc,argv,"pwm_controller");
-    ros::NodeHandle nh;
-    ros::NodeHandle privateNh("~");
-    bool initializeOnStartup = false;
-    // Invalid parameter types must not silently fall back to a startup action.
-    if (privateNh.hasParam("initialize_on_startup") &&
-        !privateNh.getParam("initialize_on_startup", initializeOnStartup)) {
-        ROS_FATAL("initialize_on_startup must be bool; raw service not advertised");
-        return 1;
-    }
-    std::ifstream boardModel("/proc/device-tree/model");
-    std::string model((std::istreambuf_iterator<char>(boardModel)), std::istreambuf_iterator<char>());
-    if (model.find("OPi 5 Plus") == std::string::npos && model.find("Orange Pi 5 Plus") == std::string::npos) {
-        ROS_FATAL("This actuator configuration requires Orange Pi 5 Plus; raw service not advertised");
-        return 1;
-    }
     try {
+        // Own PWM before ROS registration can replace a same-name node.
+        actuator_pwm::HardwareLock hardwareLock;
+        ros::init(argc,argv,"pwm_controller");
+        ros::NodeHandle nh;
+        ros::NodeHandle privateNh("~");
+        bool initializeOnStartup = false;
+        // Invalid parameter types must not silently fall back to a startup action.
+        if (privateNh.hasParam("initialize_on_startup") &&
+            !privateNh.getParam("initialize_on_startup", initializeOnStartup)) {
+            ROS_FATAL("initialize_on_startup must be bool; raw service not advertised");
+            return 1;
+        }
+        std::ifstream boardModel("/proc/device-tree/model");
+        std::string model((std::istreambuf_iterator<char>(boardModel)), std::istreambuf_iterator<char>());
+        if (model.find("OPi 5 Plus") == std::string::npos && model.find("Orange Pi 5 Plus") == std::string::npos) {
+            ROS_FATAL("This actuator configuration requires Orange Pi 5 Plus; raw service not advertised");
+            return 1;
+        }
         PWMController rear(findPWMChip(actuator_pwm::kPwmDevices[0]), 0, actuator_pwm::kPwmDevices[0]);
         PWMController right(findPWMChip(actuator_pwm::kPwmDevices[1]), 0, actuator_pwm::kPwmDevices[1]);
         PWMController left(findPWMChip(actuator_pwm::kPwmDevices[2]), 0, actuator_pwm::kPwmDevices[2]);

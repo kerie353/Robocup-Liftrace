@@ -13,11 +13,17 @@ FILES = (
     'server.py', 'wb_ssh.py', 'wb_native_ssh.py', 'wb_board.py', 'wb_status.py', 'wb_logs.py',
     'wb_geometry.py', 'wb_survey.py', 'wb_config_summary.py', 'wb_competition_geometry.py', 'board_probe.py', 'workbench.yaml',
     'start_workbench.sh', 'start_windows.cmd', 'start_windows.bat', 'start_windows.ps1',
-    'requirements.txt', 'README_DISTRIBUTION.md', 'README.md',
-    'web/index.html', 'web/app.js', 'web/style.css',
+    'requirements.txt', 'README_DISTRIBUTION.md', 'README.md', 'COMPETITION_WAYPOINTS.md',
+    'web/index.html', 'web/app.js', 'web/competition_geometry.js', 'web/style.css',
     'web/observe.html', 'web/observe.js', 'web/observe.css',
     'web/motor_wiring.json',
     'web/logs.html', 'web/logs.js', 'web/logs.css',
+    'competition_templates/deployment/competition/candidates/rectangle_motion.yaml',
+    'competition_templates/deployment/competition/candidates/snake3_motion.yaml',
+    'competition_templates/deployment/competition/candidates/snake_motion.yaml',
+    'competition_templates/deployment/competition/field.example.yaml',
+    'competition_templates/deployment/competition/field_20261007_validated.yaml',
+
 )
 
 

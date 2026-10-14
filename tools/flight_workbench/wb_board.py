@@ -214,7 +214,8 @@ def build_group_command(config, group, mode, route=None, real_release=None,
         extra = landing_extra
         writer = ''
         if site_geometry is not None:
-            field, writer = wb_competition_geometry.overlay_command(field.strip(), site_geometry, geometry_revision)
+            field, writer = wb_competition_geometry.overlay_command(field.strip(), site_geometry, geometry_revision,
+                motion=motion_optimization, columns=obstacle_columns, resume=resume_survey)
         elif geometry_revision is not None:
             raise ValueError('坐标版本缺少航点草稿')
         for option, value in (("motion-optimization", motion_optimization), ("resume-survey", resume_survey), ("obstacle-columns", obstacle_columns)):

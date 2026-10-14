@@ -42,7 +42,9 @@ def validate_patch(value):
     return json.loads(json.dumps(value, allow_nan=False))
 
 
-def overlay_command(source, geometry, revision):
+def overlay_command(source, geometry, revision, motion=None, columns=None, resume=None):
+    for value in (motion, columns, resume):
+        if value not in (None, 'on', 'off'):raise ValueError('开关仅支持on/off或继承')
     if not isinstance(revision, str) or not revision.isascii() or not revision.isalnum() or not 1 <= len(revision) <= 32:
         raise ValueError('请重新生成坐标命令')
     clean = validate_patch(geometry)
@@ -62,11 +64,13 @@ for key,value in patch.items():
   settings[key]=dict(settings.get(key) or {},**value)
  else:settings[key]=value
 sys.path[:0]=[str(root/'patrol_uav_ws-patrol_planner/src/uav_mission/src'),str(root/'vision_ws/src/uav_high_view/src')]
-from uav_mission.competition_config import validate,generate
-validate(settings,flight=False)
+from uav_mission.competition_config import validate,generate,apply_overrides
+switches=json.loads(sys.argv[4])
+effective=apply_overrides(settings,**switches)
+validate(effective,flight=False)
 if settings.get('site_confirmed') and len(settings['corridor_waypoints'])>=2 and settings['landing_xy'] is not None:
  rig=yaml.safe_load((root/'patrol_uav_ws-patrol_planner/src/uav_mission/config/competition/known_rig.yaml').read_text())
- with tempfile.TemporaryDirectory() as tmp:generate(root,tmp,settings,(0.,0.,0.),rig)
+ with tempfile.TemporaryDirectory() as tmp:generate(root,tmp,effective,(0.,0.,0.),rig)
 content=yaml.safe_dump(settings,sort_keys=False,allow_unicode=True)
 dest.parent.mkdir(parents=True,exist_ok=True)
 if dest.exists() and dest.read_text(encoding='utf-8')!=content:raise ValueError('运行配置已改变，请重新生成命令')
@@ -74,5 +78,6 @@ if not dest.exists():
  with dest.open('x',encoding='utf-8') as handle:handle.write(content)
 print('COMPETITION_SITE_OVERLAY='+str(dest))
 '''
-    command = 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(source) + ' ' + shlex.quote(relative) + ' ' + shlex.quote(base64.b64encode(data.encode()).decode())
+    switches = json.dumps(dict(motion=motion, columns=columns, resume=resume))
+    command = 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(source) + ' ' + shlex.quote(relative) + ' ' + shlex.quote(base64.b64encode(data.encode()).decode()) + ' ' + shlex.quote(switches)
     return relative, command

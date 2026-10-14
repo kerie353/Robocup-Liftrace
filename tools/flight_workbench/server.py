@@ -735,37 +735,7 @@ class Workbench(object):
             raise ValueError("低空观察 flight 尚未退出；先飞手手动落地上锁并等待 OBSERVATION_CLOSED，保留定位与MAVROS")
 
     def competition_config_summary(self, body):
-        """Display selected YAML switches without running the mission entry."""
-        from pathlib import Path
-        group = next((g for g in self.config.get('groups', [])
-                      if g['id'] == body.get('group_id') and g.get('channel') == 'competition'), None)
-        if group is None:
-            raise ValueError('仅支持独立正赛配置')
-        path = body.get('competition_config', group.get('site_config'))
-        if not isinstance(path, str) or not path.strip() or any(c in path for c in '\r\n\x00'):
-            raise ValueError('请填写场地 YAML 路径')
-        path = path.strip()
-        if self.connection.get('state') == 'ok':
-            code, output = self.board.run(wb_config_summary.read_command(self.config['connection']['board_root'], path), timeout=15.)
-            if code:
-                raise ValueError('板端 YAML 读取失败：' + output[-1000:])
-            try:
-                values = json.loads(output.strip().splitlines()[-1])
-            except (ValueError, IndexError):
-                raise ValueError('板端 YAML 返回格式无效')
-            source = 'board_yaml'
-        else:
-            root = Path(__file__).resolve().parents[2]
-            file = (root / path).resolve()
-            if root not in file.parents:
-                raise ValueError('场地 YAML 必须位于当前工程内')
-            if not file.is_file():
-                raise ValueError('本地没有此 YAML，请连接板端后读取')
-            if file.stat().st_size > 1048576:
-                raise ValueError('场地 YAML 过大')
-            values = wb_config_summary.parse(file.read_text(encoding='utf-8'))
-            source = 'pc_yaml'
-        return {'ok': True, 'path': path, 'source': source, 'values': values}
+        return wb_config_summary.load(self, body)
 
     def trial_command(self, body):
         """Pure command preview: usable offline, no connection or file writes."""

@@ -1,0 +1,11 @@
+# Isolated 4x4 SITL fixture. Coordinates are not the hardware field.
+high_agl: 2.0
+max_agl: 2.3
+landing_handoff_mode: POSCTL
+landing_xy: [3.1, 1.1]
+corridor_waypoints:
+  - {x: 0.65, y: 1.1, agl: 1.0}
+  - {x: 1.2, y: 1.1, agl: 1.0}
+  - {x: 1.8, y: 1.1, agl: 1.0}
+  - {x: 2.2, y: 1.1, agl: 1.0}
+  - {x: 2.8, y: 1.1, agl: 1.0}

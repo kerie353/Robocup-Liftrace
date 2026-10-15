@@ -288,6 +288,9 @@ def main():
         mission_sub=rospy.Subscriber('/navigation/mission_status',String,mission_status,queue_size=1)
         on_ground_since=None;last_status_log=0.
         auto_enabled=a.mode=='flight' and settings.get('auto_start_after_arm',False)
+        # Module 08 relaxes only the auto-start hover gate; other trials retain theirs.
+        auto_start_height_tolerance=.3 if a.trial=='full_mission' else .15
+        auto_start_stable_duration=.3 if a.trial=='full_mission' else 1.
         start_attempted=False;auto_cancelled=False;offboard_seen=False;hover_since=None
         while not rospy.is_shutdown():
             if any(c.poll() is not None for c in children):raise RuntimeError('A launch exited; inspect logs')
@@ -311,12 +314,12 @@ def main():
                         now=rospy.Time.now().to_sec()
                         recent=[v for v in samples if 0<=now-v[4]<=1.]
                     ready=(len(recent)>=10 and now-recent[-1][4]<.3
-                           and abs(recent[-1][2]-reference['takeoff_z'])<.15
+                           and abs(recent[-1][2]-reference['takeoff_z'])<auto_start_height_tolerance
                            and np.max(np.ptp(np.array(recent)[:,:3],axis=0))<.12)
                     if ready:
                         hover_since=hover_since or time.monotonic()
                     else:hover_since=None
-                    if not start_attempted and hover_since is not None and time.monotonic()-hover_since>=1.:
+                    if not start_attempted and hover_since is not None and time.monotonic()-hover_since>=auto_start_stable_duration:
                         start_attempted=True
                         from std_srvs.srv import Trigger
                         try:

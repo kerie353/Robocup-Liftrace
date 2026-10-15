@@ -39,6 +39,10 @@ def main():
     MapWarmup(0.,startup)  # Validate before starting ROS children.
     for key in ('map_timeout','state_max_age'):
         if not math.isfinite(float(startup[key])) or float(startup[key])<=0:raise ValueError('invalid mapping startup '+key)
+    if a.site_config is None and a.trial in ('full_mission','low_coverage_full'):
+        a.site_config=base/folder/'site_waypoint_map_20261015.yaml'
+        if not a.site_config.is_file():
+            p.error('Registered default site config not found: '+str(a.site_config))
     if a.site_config:
         profile=yaml.safe_load(a.site_config.read_text()) or {}
         if a.trial=='low_coverage_full':
@@ -50,6 +54,8 @@ def main():
     from trial_low_coverage import prepare_low_coverage
     try:prepare_low_coverage(settings,site_provided=a.site_config is not None,height=a.coverage_agl,lane_spacing=a.coverage_lane_spacing,scan_axis=a.coverage_scan_axis,pattern=a.coverage_pattern,cross_inset=a.coverage_cross_inset)
     except ValueError as error:p.error(str(error))
+    if a.speed_profile is None and a.trial in ('full_mission','low_coverage_full'):
+        a.speed_profile='competition'
     if a.speed_profile is not None:
         from trial_speed_profiles import apply_speed_profile
         try:apply_speed_profile(a.root,settings,a.trial,a.speed_profile)

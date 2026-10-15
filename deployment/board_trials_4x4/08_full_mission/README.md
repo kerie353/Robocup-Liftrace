@@ -1,3 +1,19 @@
+> 2026-10-15最新：08高位、10牛耕/回字形默认 competition 档，规划速度1.2m/s、加速度1.0m/s²，巡航前视1.0m、其他导航前视0.6m。显式 --speed-profile limited 仍覆盖默认。两份登记现场文件 H捕获均为FC1.1m，转场保持1.0m；下方旧0.9m捕获/默认低速表述仅为历史。无实飞验收。
+
+# 2026-10-15 当前真实场地图默认入口
+
+默认现场文件为 [site_waypoint_map_20261015.yaml](site_waypoint_map_20261015.yaml)，替代旧10/07有限场地默认选择。无需手填或勾选实测航点；无显式 --site-config 时自动加载，文件缺失报错，不回退旧小场地。显式 --site-config 优先；工作台若继续显式传旧路径会覆盖此默认，须同步切换到本文件。
+
+FC高位2.6m、max_agl 3.2m、rectangle闭合四边形 (1,-3.5)→(5.5,-3.5)→(5.5,3.5)→(1,3.5)→(1,-3.5)。低位1.4m，投递继承08的0.25m，H捕获按最新指令1.1m。搜索范围保留原map search_center_bounds X[-0.1,7.05]/Y[-4.35,4.35]；10另用coverage_bounds，未混用。走廊、H和其他几何复制10已登记用户确认地图。靶区不包含走廊，完整任务校验搜索区位于靶区内、飞行区仍包含所有航点。
+
+纯离线检查（不启动ROS）：
+
+```bash
+python deployment/board_trials_4x4/common/uav_board_trials/scripts/run_trial.py full_mission preview --root "$PWD" --check-config
+```
+
+本次仅离线配置验证，未上板或实飞。以下10/07说明为历史参考，不代表当前默认配置。
+
 # 2026-10-08 昨日现场几何与显式正赛速度
 
 工作台第08组固定选择 [site_20261007_221730.yaml](site_20261007_221730.yaml)，来源为
@@ -44,7 +60,7 @@ bash deployment/board_trials_4x4/08_full_mission/start.sh preview \
 
 # 08_full_mission
 
-整任务：高位搜索、低位重访三投、实测走廊航点自主避障、H 视觉降落。corridor_waypoints 和 landing_xy 默认留空，未填写会拒绝启动。不能把仿真航点直接用于现场。
+整任务：高位搜索、低位重访三投、实测走廊航点自主避障、H 视觉降落。corridor_waypoints 和 landing_xy 由上述默认登记现场文件提供。不能把仿真航点直接用于现场。
 
 共同参数、坐标系、阈值和启动步骤见 [八组说明](../MODULES.md)。
 

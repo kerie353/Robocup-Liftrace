@@ -56,6 +56,8 @@ def apply_site_profile(settings, profile):
         allowed.add('low_agl')
     if settings.get('trial_kind') in ('corridor_landing','full_mission','low_multi_corridor'):
         allowed.update(('corridor_waypoints','corridor_geometry'))
+    if settings.get('trial_kind') == 'full_mission':
+        allowed.update(('survey_pattern','landing_transit_agl','landing_capture_agl'))
     if settings.get('backup_profile') == 'low_coverage_full':
         allowed.update(('landing_transit_agl','landing_capture_agl','coverage_pattern','coverage_rectangles','coverage_cross_inset','coverage_lane_spacing','coverage_scan_axis','coverage_loop_inset'))
     if not isinstance(profile,dict) or set(profile)-allowed:
@@ -92,7 +94,7 @@ def flight_geometry(settings):
     def inside(point,box=bounds):
         return isinstance(point,(list,tuple)) and len(point)==2 and all(finite(t) for t in point) and box[0]<=point[0]<=box[1] and box[2]<=point[1]<=box[3]
     if not inside([0.,0.]) or not inside(area["staging_xy"]):raise ValueError("Origin/staging outside flight_area")
-    if settings.get('backup_profile') != 'low_coverage_full' and not all(inside(v,target) for v in ([bounds[0],bounds[2]],[bounds[1],bounds[3]])):
+    if settings.get('backup_profile') != 'low_coverage_full' and settings.get('trial_kind') != 'full_mission' and not all(inside(v,target) for v in ([bounds[0],bounds[2]],[bounds[1],bounds[3]])):
         raise ValueError("target_bounds must contain center_bounds")
     if not all(inside(v) for v in ([search[0],search[2]],[search[1],search[3]])):raise ValueError("Search bounds outside flight_area")
     if 'survey_pattern' in settings:
@@ -101,8 +103,8 @@ def flight_geometry(settings):
         old=area['survey_xy'];xs=[min(v[0] for v in old),max(v[0] for v in old)]
         if settings['survey_pattern']=='snake3':xs.insert(1,sum(xs)/2)
         area['survey_xy']=survey_route(settings['survey_pattern'],xs,min(v[1] for v in old),max(v[1] for v in old),start_high=old[0][1]>sum(v[1] for v in old)/len(old))
-    if settings.get('backup_profile') == 'low_coverage_full' and not all(inside(v,target) for v in ([search[0],search[2]],[search[1],search[3]])):
-        raise ValueError('Coverage search bounds must lie within target_bounds')
+    if (settings.get('backup_profile') == 'low_coverage_full' or settings.get('trial_kind') == 'full_mission') and not all(inside(v,target) for v in ([search[0],search[2]],[search[1],search[3]])):
+        raise ValueError('Search bounds must lie within target_bounds')
     points=area["survey_xy"]
     if not isinstance(points,list) or len(points)<(2 if settings.get('mode')=='high_speed_capture' else 3) or any(not inside(v) for v in points):raise ValueError("Survey point outside flight_area")
     if settings.get('mode')=='high_speed_capture':

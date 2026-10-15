@@ -66,7 +66,7 @@ class LowCoverageConfig(unittest.TestCase):
                 if key not in ('drop_agl','landing_xy','landing_capture_agl','landing_transit_agl'):
                     self.assertEqual(value[key],full[key],key)
         self.assertEqual(value['drop_agl'],.25)
-        self.assertEqual(value['landing_capture_agl'],.9)
+        self.assertEqual(value['landing_capture_agl'],1.1)
         self.assertEqual(value['delivery_count'],3)
         self.assertNotIn('resume_survey_enabled',value)
         self.assertTrue(value['auto_start_after_arm'])
@@ -124,7 +124,7 @@ class LowCoverageConfig(unittest.TestCase):
                     self.assertGreater(low_stage['/external_planner_max_command_z'],ref['low_z']+.2)
                     self.assertEqual(runtime['mission']['post_delivery_route'][0][:2],[6.91,3.39])
                     self.assertEqual(runtime['mission']['post_delivery_route'][-1][:2],[8.31,-3.51])
-                    self.assertAlmostEqual(runtime['mission']['post_delivery_route'][-1][2]-ref['ground_z'],.9)
+                    self.assertAlmostEqual(runtime['mission']['post_delivery_route'][-1][2]-ref['ground_z'],1.1)
                     self.assertEqual(control['external_landing']['handoff_mode'],'POSCTL')
                     self.assertEqual(value['drop_agl'],.25)
                     self.assertAlmostEqual(control['drop_system']['release_setpoint_height']-ref['ground_z'],.25)
@@ -281,7 +281,7 @@ class LowCoverageConfig(unittest.TestCase):
             coverage_bounds=existing['flight_area']['search_bounds'],staging_xy=existing['flight_area']['staging_xy'],
             survey_xy=existing['flight_area']['survey_xy'],map_size=existing['flight_area']['map_size'],
             corridor_waypoints=existing['corridor_waypoints'],landing_xy=existing['landing_xy'],
-            landing_transit_agl=1.,landing_capture_agl=.9,low_agl=1.4,high_agl=2.6,
+            landing_transit_agl=1.,landing_capture_agl=existing['landing_capture_agl'],low_agl=1.4,high_agl=2.6,
             search_center_bounds=[-.1,7.05,-4.35,4.35],corridor_speed_schedule=dict(axis=1,wall_coordinates=[-1.6,1.6],entry_waypoints=1))
         original=copy.deepcopy(source)
         converted=normalize_coverage_site(source)
@@ -306,8 +306,7 @@ class LowCoverageConfig(unittest.TestCase):
     def test_cli_offline_generate_and_missing_site_fails_before_ros(self):
         command=[sys.executable,str(SCRIPTS/'run_trial.py'),'low_coverage_full','preview','--root',str(ROOT),'--check-config']
         result=subprocess.run(command,text=True,capture_output=True)
-        self.assertNotEqual(result.returncode,0)
-        self.assertIn('requires explicit --site-config',result.stderr)
+        self.assertEqual(result.returncode,0,result.stderr)
         for height in (1.8,1.9):
             with tempfile.TemporaryDirectory() as out:
                 result=subprocess.run(command+['--site-config',str(BASE/FOLDER/'site_waypoint_map_20261015.yaml'),

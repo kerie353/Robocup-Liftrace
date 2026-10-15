@@ -44,6 +44,11 @@ class ResumeCLI(unittest.TestCase):
                 site=root/'site.yaml'
                 shutil.copyfile(BASE/'10_low_coverage_full/site_waypoint_map_20261015.yaml',site)
                 args+=['--site-config',str(site)]
+            if trial in ('full_mission','low_coverage_full'):
+                inherited=base/'08_full_mission'
+                if trial=='full_mission':
+                    shutil.copyfile(BASE/'08_full_mission/site_waypoint_map_20261015.yaml',folder/'site_waypoint_map_20261015.yaml')
+                shutil.copyfile(BASE/'08_full_mission/competition_speed.yaml',inherited/'competition_speed.yaml')
             if option is not None:args+=['--resume-survey',option]
             seen=[]
             validate=run_trial.validate_settings

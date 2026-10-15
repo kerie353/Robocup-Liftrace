@@ -68,7 +68,7 @@ def prepare_low_coverage(settings, *, site_provided, height=None, lane_spacing=N
             raise ValueError('Coverage options only apply to low_coverage_full')
         return settings
     if not site_provided:
-        raise ValueError('low_coverage_full requires explicit --site-config; no default field is permitted')
+        raise ValueError('low_coverage_full requires a loaded registered or explicit site config')
     if height is not None:
         settings['low_agl'] = height
     if lane_spacing is not None:

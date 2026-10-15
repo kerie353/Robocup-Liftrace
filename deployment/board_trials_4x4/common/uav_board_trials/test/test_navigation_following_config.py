@@ -32,7 +32,10 @@ class NavigationFollowingConfig(unittest.TestCase):
             r, c, o = [yaml.safe_load((Path(out) / (name + '.yaml')).read_text())
                        for name in ('runtime', 'control', 'overrides')]
         self.assertEqual(settings, original, 'historical input must not be rewritten')
-        self.assertEqual(r['following_speed_profile'], EXPECTED)
+        expected = dict(EXPECTED)
+        if generate_fn is generate and settings['mode'] == 'landing':
+            expected['cruise_lead_m'] = expected['corridor_lead_m']
+        self.assertEqual(r['following_speed_profile'], expected)
         self.assertEqual(c['px4_max_distance'], .6)
         if generate_fn is generate:
             self.assertEqual(o['/px4_max_distance'], .6)
@@ -67,6 +70,21 @@ class NavigationFollowingConfig(unittest.TestCase):
                     self.assertEqual(o['/navigation/planner_bridge/execution/arrival_dwell'],.8)
                 else:
                     self.assertEqual(o[key],[])
+
+    def test_03_first_and_remaining_h_legs_fit_controller_admission(self):
+        from trial_config import load_trial_settings
+        rig = yaml.safe_load((BASE / 'common/uav_board_trials/config/known_rig.yaml').read_text())
+        settings = load_trial_settings(ROOT, '03_h_landing')
+        runtime, control, overrides = self.assert_generated(generate, settings, rig)
+        profile = FollowingSpeed(**runtime['following_speed_profile'])
+        for index in range(len(runtime['mission']['post_delivery_route'])):
+            with self.subTest(leg=index):
+                phase, lead = profile.select('RETURN_HOME', 'post_delivery_route:%d' % (index+1), index)
+                self.assertEqual(lead, .6)
+                self.assertLess(lead, overrides['/external_planner_start_max_distance'])
+        self.assertEqual(overrides['/external_planner_start_max_distance'], .75)
+        self.assertEqual(control['external_landing']['alignment_mode'], settings['landing_alignment_mode'])
+        self.assertEqual(control['external_landing']['descent']['mode'], settings['landing_descent_mode'])
 
     def test_08_ordinary_waypoint_dwell_switch_in_both_speed_profiles(self):
         from trial_speed_profiles import apply_speed_profile

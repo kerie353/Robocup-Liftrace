@@ -851,6 +851,10 @@ function groupCommandBody(g, mode, realRelease, checkConfig, speed, options) {
   var extra = '';
   options = options || {};
   if (route === 'competition') {
+    if (options.site_geometry !== undefined) {
+      var plans=groupUI(g).geometryPlans || {};
+      return plans[geometryPlanKey(g,mode,realRelease,checkConfig,speed,options)] || {body:null,note:'正赛航点已改动，请重新生成坐标命令'};
+    }
     var field = options.competition_config == null ? g.site_config : options.competition_config;
     if (typeof field !== 'string' || !field.trim() || /[\r\n\x00]/.test(field) ||
         (mode === 'flight' && !checkConfig && !realRelease)) return {body:null,note:'独立正赛需要场地配置，flight仅支持实投'};
@@ -968,7 +972,9 @@ function competitionEffectiveConfig(g,options,stage,trial) {
     (trial.obstacle_columns || null)===(options.obstacle_columns || null) &&
     (trial.speed_profile || null)===(options.speed_profile || null) &&
     (trial.survey_pattern || null)===(options.survey_pattern || null) &&
-    !!trial.motion_optimized===!!options.motion_optimized;
+    !!trial.motion_optimized===!!options.motion_optimized &&
+    (trial.geometry_revision || null)===(options.geometry_revision || null) &&
+    JSON.stringify(trial.site_geometry || null)===JSON.stringify(options.site_geometry || null);
   return actual && matches ? effectiveConfigText(actual) : '当前所选配置的有效值尚未确认：先运行配置检查。复选框和选项只表示请求。';
 }
 
@@ -979,7 +985,7 @@ function effectiveConfigText(actual) {
   if (actual.initial_distances) speeds += '；初始化限幅/轨迹前视/规划启动=' + actual.initial_distances.controller_limit_m + '/' + actual.initial_distances.traj_target_dist_m + '/' + actual.initial_distances.planner_start_max_distance_m + 'm';
   if (actual.corridor) speeds += '；走廊快/慢=' + actual.corridor.open_lead_m + '/' + actual.corridor.door_lead_m + 'm';
   if (actual.drop_agl != null) speeds += '；投递FC AGL=' + actual.drop_agl + 'm';
-  return source + speeds + '：运动优化=' + (actual.motion_optimization ? '开启' : '关闭') + '；高位续扫=' + (actual.resume_survey ? '开启' : '关闭') + (actual.generation_ready===false ? '；实测场地/墙面未确认，尚不可生成飞行配置' : '') + (actual.runtime_path ? '；' + actual.runtime_path : '');
+  return source + speeds + '：运动优化=' + (actual.motion_optimization ? '开启' : '关闭') + '；高位续扫=' + (actual.resume_survey ? '开启' : '关闭') + (typeof actual.obstacle_columns==='boolean' ? '；障碍柱='+(actual.obstacle_columns?'开启':'关闭') : '') + (actual.generation_ready===false ? '；实测场地/墙面未确认，尚不可生成飞行配置' : '') + (actual.runtime_path ? '；' + actual.runtime_path : '');
 }
 
 function groupUI(g) {
@@ -1006,7 +1012,7 @@ function trialBody(g, mode, checkConfig) {
   if (g.motion_optimization_supported && U.motionOptimized) body.motion_optimized = true;
   if (g.survey_patterns && U.pattern) body.survey_pattern = U.pattern;
   if (g.resume_survey_supported && U.resume) body.resume_survey = U.resume;
-  if ((g.needs_waypoints || g.survey_patterns || g.folder==='09_high_speed_capture') && U.geometryEnabled) {body.site_geometry=U.geometryValues || {};body.geometry_revision=U.geometryRevision || '';}
+  if ((g.channel==='competition' || g.needs_waypoints || g.survey_patterns || g.folder==='09_high_speed_capture') && U.geometryEnabled) {body.site_geometry=U.geometryValues || {};body.geometry_revision=U.geometryRevision || '';}
   if (!checkConfig) body.confirm = body.real_release ? '实投' : '启动试飞';
   var built = groupCommandBody(g, body.mode, body.real_release, !!body.check_config, body.capture_speed, body);
   if (built.body) body.expected_body = built.body;
@@ -1018,6 +1024,7 @@ function geometryPlanKey(g, mode, realRelease, checkConfig, speed, options) {
   return JSON.stringify([g.id, c.host, c.board_root, c.site_dir, g.site_config,
     mode, !!realRelease, !!checkConfig, speed || null, options.capture_lighting || null,
     !!options.motion_optimized, options.survey_pattern || null, options.resume_survey || null, options.speed_profile || null,
+    options.competition_config || null, options.motion_optimization || null, options.obstacle_columns || null,
     options.geometry_revision, options.site_geometry]);
 }
 
@@ -1190,17 +1197,20 @@ function groupCard(g) {
   if (g.competition_options_supported) {
     var presetRow=el('div','grp-row');presetRow.appendChild(el('span','lbl','配置来源'));
     var preset=el('select','grp-choice');preset.setAttribute('data-option','competitionPreset');
-    var custom=el('option',null,'自定义路径（在下方填写）');custom.value='';preset.appendChild(custom);
+    var custom=el('option',null,'其他文件（点击下方选择文件）');custom.value='';preset.appendChild(custom);
     (g.competition_config_options || []).forEach(function(item){var option=el('option',null,item.label);option.value=item.path;preset.appendChild(option);});
     preset.value=U.competitionConfig == null ? g.site_config : U.competitionConfig;
-    preset.addEventListener('change',function(){if(preset.value){U.competitionConfig=preset.value;U.armedOk=false;U.realConfirm='';renderGroups();}});
+    preset.addEventListener('change',function(){if(preset.value){U.competitionConfig=preset.value;U.geometryEnabled=false;U.geometryPlans={};U.armedOk=false;U.realConfirm='';renderGroups();}});
     presetRow.appendChild(preset);ops.appendChild(presetRow);
     var configRow = el('div','grp-row');
     configRow.appendChild(el('span','lbl','场地YAML'));
-    var field = el('input'); field.type='text'; field.setAttribute('data-option','competitionConfig');
-    field.value = U.competitionConfig == null ? g.site_config : U.competitionConfig;
-    field.addEventListener('change',function(){U.competitionConfig=field.value;renderGroups();});
-    configRow.appendChild(field);ops.appendChild(configRow);
+    var currentPath=U.competitionConfig == null ? g.site_config : U.competitionConfig;
+    var fileInfo=el('div','competition-file-current');
+    fileInfo.appendChild(el('strong',null,(currentPath || '').split('/').pop() || '尚未选择'));
+    fileInfo.appendChild(el('small',null,(currentPath || '').split('/').slice(0,-1).join('/') || '工程目录'));
+    var chooseFile=el('button','btn btn-sm','选择文件');chooseFile.setAttribute('data-option','competitionConfig');chooseFile.disabled=tSessRunning();
+    chooseFile.onclick=function(){competitionFilePicker(g);};fileInfo.appendChild(chooseFile);
+    configRow.appendChild(fileInfo);ops.appendChild(configRow);
     if (U.competitionConfig === 'deployment/competition/field_20261007_validated.yaml') {
       ops.appendChild(el('div','warn-line','当前选择测试场地复现：不是正赛默认参数，不能宣称10×10比赛验收；实际高度/速度以前述文件的配置检查为准。'));
     }
@@ -1237,6 +1247,7 @@ function groupCard(g) {
   }
 
   if (g.competition_options_supported) {
+    ops.appendChild(competitionOptionsPanel(g,U));
     var selectedOptions=trialBody(g,'preview',true);
     ops.appendChild(el('div','tiny muted','所选配置：' + (selectedOptions.competition_config || g.site_config) + '；运动优化=' + (selectedOptions.motion_optimization || '继承') + '；高位续扫=' + (selectedOptions.resume_survey || '继承')));
     ops.appendChild(el('div','tiny muted',competitionEffectiveConfig(g,selectedOptions,state.stage,state.trial)));
@@ -1293,6 +1304,8 @@ function groupCard(g) {
     ops.appendChild(geometryEditor(g,U,function(){if(flightBtn)updateFlightBtn();}));
     if(g.needs_waypoints)ops.appendChild(el('div','warn-line','走廊/H航点仍需实测；自动搜索不会代填门口。'));
   }
+
+  if (g.channel==='competition') ops.appendChild(competitionGeometryEditor(g,U));
 
   // 按钮
   var btnRow = el('div', 'grp-row');

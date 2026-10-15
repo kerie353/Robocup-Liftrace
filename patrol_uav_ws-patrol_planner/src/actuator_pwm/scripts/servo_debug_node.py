@@ -1,268 +1,267 @@
 #!/usr/bin/env python3
+"""Orange Pi 5 Plus debug service. Owns PWM exclusively until shutdown.
+
+Slots: rear febf0000 Pin16, right febf0020 Pin7, left febf0010 Pin18.
+Status: [rear_duty, rear_enabled, right_duty, right_enabled, left_duty, left_enabled].
+Run init_pwm.sh first. No startup pulses; acknowledgements are electrical only.
 """
-实机舵机调试后端节点 (Orange Pi 5 Plus)。
-
-功能：
-  - 提供 patrol_control/SetServoDuty 服务，支持对 rear/right/left 三个舵机通道
-    设置任意 PWM duty cycle (0.5ms~2.5ms)。
-  - 安全时序：disable -> set_duty -> enable -> 等待 -> disable。
-  - 在非 Orange Pi 5 Plus 硬件上启动时会 fatal 退出。
-  - 同时发布 /servo_debug/status ([Float32MultiArray]) 话题，
-    数据为 [rear_duty_ns, right_duty_ns, left_duty_ns, rear_enabled, right_enabled, left_enabled]。
-    供 GUI 轮询实时状态。
-
-运行前提：
-  1. Orange Pi 5 Plus (40 pin header)
-  2. 已运行 sudo bash init_pwm.sh (设置 PWM 权限和 period)
-  3. 节点对 /sys/class/pwm/pwmchipN/pwm0/{duty_cycle,enable} 有可写权限
-
-通道映射 (BoardWiring.h):
-  slot=1 (rear) : febf0000.pwm   GPIO3_B5 PWM12_M0   Pin16
-  slot=2 (right): febf0020.pwm   GPIO1_D6 PWM14_M2   Pin7
-  slot=3 (left) : febf0010.pwm   GPIO3_B6 PWM13_M0   Pin18
-"""
-
+import fcntl
 import os
-import re
-import time
+import threading
+
 import rospy
 from std_msgs.msg import Float32MultiArray
+from std_srvs.srv import Trigger, TriggerResponse
 from patrol_control.srv import SetServoDuty, SetServoDutyResponse
 
+PWM_PERIOD_NS = 20_000_000
+DUTY_MIN_NS = 500_000
+DUTY_MAX_NS = 2_500_000
+EXPECTED_DEVICES = ['febf0000.pwm', 'febf0020.pwm', 'febf0010.pwm']
+LOCK_PATH = '/run/lock/liftrace-servo.lock'
 
-PWM_PERIOD_NS = 20_000_000   # 20ms
-DUTY_MIN_NS = 500_000         # 0.5ms
-DUTY_MAX_NS = 2_500_000       # 2.5ms
 
-# BoardWiring.h 中的设备名，按 slot 1/2/3 顺序
-EXPECTED_DEVICES = ["febf0000.pwm", "febf0020.pwm", "febf0010.pwm"]
+class HardwareLock:
+    def __init__(self, path=LOCK_PATH):
+        self.fd = os.open(path, os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BaseException:
+            os.close(self.fd)
+            self.fd = None
+            raise RuntimeError('PWM is occupied by initialization/raw/debug service')
 
-# SlotCalibration.h 中的参考值
-INITIAL_DUTY_NS = [1_700_000, 1_000_000, 1_100_000]  # locked
-RELEASE_DUTY_NS = [2_100_000, 2_100_000, 2_100_000]  # release
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
 
 
 def _read_text(path):
     try:
-        with open(path, "r") as f:
-            return f.read().strip()
-    except (OSError, IOError):
+        with open(path) as handle:
+            return handle.read().strip()
+    except OSError:
         return None
 
 
 def _write_text(path, value):
     try:
-        with open(path, "w") as f:
-            f.write(str(value))
-            f.flush()
-        # readback 验证
-        actual = _read_text(path)
-        return actual == str(value)
-    except (OSError, IOError) as exc:
-        rospy.logerr("PWM write failed %s=%s: %s", path, value, exc)
+        with open(path, 'w') as handle:
+            handle.write(str(value))
+            handle.flush()
+        return _read_text(path) == str(value)
+    except OSError as exc:
+        rospy.logerr('PWM write failed %s=%s: %s', path, value, exc)
         return False
 
 
 def _find_pwm_chip(device_name):
-    """通过设备名 (如 febf0000.pwm) 查找对应的 pwmchipN 路径。"""
-    for chip in range(64):
-        base = f"/sys/class/pwm/pwmchip{chip}"
-        if not os.path.isdir(base):
-            continue
-        try:
-            resolved = os.path.realpath(base)
-        except OSError:
-            continue
-        if f"/{device_name}/" in resolved:
-            return f"{base}/pwm0"
-    return None
+    paths = [f'/sys/class/pwm/pwmchip{i}' for i in range(64)]
+    matches = [p + '/pwm0' for p in paths if os.path.isdir(p)
+               and f'/{device_name}/' in os.path.realpath(p)]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _is_orange_pi_5_plus():
-    model = _read_text("/proc/device-tree/model")
-    if model is None:
-        return False
-    return "OPi 5 Plus" in model or "Orange Pi 5 Plus" in model
+    model = _read_text('/proc/device-tree/model') or ''
+    return 'OPi 5 Plus' in model or 'Orange Pi 5 Plus' in model
 
 
 class PWMChannel:
-    """单个 PWM 通道的封装。"""
-
     def __init__(self, pwm_path, slot_name):
         self.pwm_path = pwm_path
-        self.slot_name = slot_name  # "rear"/"right"/"left"
-        self._enabled = False
-        self._current_duty = 0
+        self.slot_name = slot_name
 
     @property
     def enable_path(self):
-        return f"{self.pwm_path}/enable"
+        return self.pwm_path + '/enable'
 
     @property
     def duty_path(self):
-        return f"{self.pwm_path}/duty_cycle"
+        return self.pwm_path + '/duty_cycle'
 
     def read_enable(self):
-        val = _read_text(self.enable_path)
-        return val == "1"
+        return _read_text(self.enable_path) == '1'
 
     def read_duty(self):
-        val = _read_text(self.duty_path)
         try:
-            return int(val) if val is not None else 0
-        except ValueError:
-            return 0
+            return int(_read_text(self.duty_path))
+        except (TypeError, ValueError):
+            return None
 
     def set_enable(self, enabled):
-        ok = _write_text(self.enable_path, "1" if enabled else "0")
-        if ok:
-            self._enabled = enabled
-        return ok
+        target = '1' if enabled else '0'
+        if _read_text(self.enable_path) == target:
+            return True
+        return _write_text(self.enable_path, target)
 
     def set_duty(self, duty_ns):
-        if not DUTY_MIN_NS <= duty_ns <= DUTY_MAX_NS:
-            rospy.logwarn("duty %d 超出安全范围 [%d, %d]", duty_ns, DUTY_MIN_NS, DUTY_MAX_NS)
-        ok = _write_text(self.duty_path, str(duty_ns))
-        if ok:
-            self._current_duty = duty_ns
-        return ok
+        return DUTY_MIN_NS <= duty_ns <= DUTY_MAX_NS and _write_text(self.duty_path, duty_ns)
 
-    def safe_pulse(self, duty_ns, hold=False, wait_sec=0.3):
-        """
-        安全 PWM 脉冲: disable -> set_duty -> enable -> 等待 -> [disable 或保持 enable]。
-        返回 (success, actual_duty, message)。
-        """
-        # 1. disable
-        if not self.set_enable(False):
-            return False, 0, "failed to disable before set_duty"
-        time.sleep(0.02)
-
-        # 2. set duty
-        if not self.set_duty(duty_ns):
-            return False, 0, f"failed to set duty to {duty_ns}"
-
-        # 3. enable
-        if not self.set_enable(True):
-            self.set_enable(False)
-            return False, 0, "failed to enable after set_duty"
-
-        # 4. 短暂等待让舵机动作
-        if wait_sec > 0:
-            time.sleep(wait_sec)
-
-        # 5. disable (除非要求保持)
-        if not hold:
+    def safe_pulse(self, duty_ns, hold=False, wait_sec=0.3, cancel=None):
+        cancel = cancel or threading.Event()
+        success = False
+        message = 'PWM operation failed'
+        try:
+            if cancel.is_set():
+                raise RuntimeError('request cancelled')
             if not self.set_enable(False):
-                rospy.logwarn("failed to disable after pulse (slot=%s)", self.slot_name)
+                raise RuntimeError('failed to disable before set_duty')
+            if cancel.wait(0.02):
+                raise RuntimeError('request cancelled')
+            if not self.set_duty(duty_ns):
+                raise RuntimeError('failed to write/read duty')
+            if cancel.is_set():
+                raise RuntimeError('request cancelled')
+            if not self.set_enable(True):
+                raise RuntimeError('failed to enable/read output')
+            if cancel.wait(wait_sec):
+                raise RuntimeError('request cancelled')
+            if not hold and not self.set_enable(False):
+                raise RuntimeError('failed to disable after pulse')
+            if self.read_duty() != duty_ns or _read_text(self.enable_path) != ('1' if hold else '0'):
+                raise RuntimeError('final PWM readback mismatch')
+            success, message = True, 'ok'
+        except Exception as exc:
+            message = str(exc)
+        finally:
+            if not success:
+                try:
+                    if not self.set_enable(False) or _read_text(self.enable_path) != '0':
+                        message += '; output disable unconfirmed'
+                except Exception as exc:
+                    message += '; cleanup failed: ' + str(exc)
+        return success, self.read_duty() or 0, message
 
-        actual = self.read_duty()
-        return True, actual, "ok"
+
+class ServoTransactions:
+    """No stale queued request can re-enable PWM after stop has returned."""
+    def __init__(self, channels):
+        self.channels = channels
+        self.state_lock = threading.Lock()
+        self.transaction_lock = threading.Lock()
+        self.stop_lock = threading.Lock()
+        self.generation = 0
+        self.cancel = threading.Event()
+        self.stopping = False
+        self.fault = False
+        self.shutting_down = False
+
+    def set(self, slot, duty, hold):
+        if type(slot) is not int or not 1 <= slot <= 3 or not DUTY_MIN_NS <= duty <= DUTY_MAX_NS:
+            return False, 0, 'invalid slot or duty'
+        with self.state_lock:
+            if self.stopping or self.fault or self.shutting_down:
+                return False, 0, 'stopping/fault/shutdown: stop successfully before sending'
+            generation, cancel = self.generation, self.cancel
+        with self.transaction_lock:
+            with self.state_lock:
+                if generation != self.generation or self.stopping or self.fault or self.shutting_down:
+                    return False, 0, 'stale request cancelled'
+            channel = self.channels[slot - 1]
+            result = channel.safe_pulse(duty, hold, cancel=cancel)
+            if not result[0] and _read_text(channel.enable_path) != '0':
+                with self.state_lock:
+                    self.fault = True
+            return result
+
+    def stop(self, shutdown=False):
+        with self.stop_lock:
+            with self.state_lock:
+                self.stopping = True
+                self.generation += 1
+                self.cancel.set()
+                if shutdown:
+                    self.shutting_down = True
+            errors = []
+            with self.transaction_lock:
+                for channel in self.channels:
+                    try:
+                        if not channel.set_enable(False) or _read_text(channel.enable_path) != '0':
+                            errors.append(channel.slot_name + ': disable readback failed')
+                    except Exception as exc:
+                        errors.append(channel.slot_name + ': ' + str(exc))
+                with self.state_lock:
+                    self.fault = bool(errors)
+                    # A failed explicit shutdown can be retried with stop/shutdown.
+                    if errors and shutdown:
+                        self.shutting_down = False
+                    self.cancel = threading.Event()
+                    self.stopping = False
+            return not errors, '; '.join(errors) or 'all PWM outputs disabled; duty unchanged'
 
 
 class ServoDebugNode:
-    """舵机调试 ROS 节点。"""
-
     def __init__(self):
-        rospy.init_node("servo_debug_node", anonymous=False)
-
-        # 硬件检测
         if not _is_orange_pi_5_plus():
-            rospy.logfatal("servo_debug_node 只能运行在 Orange Pi 5 Plus 上。")
-            raise SystemExit(1)
-
-        rospy.loginfo("Orange Pi 5 Plus detected, searching PWM chips...")
-
-        self.channels = []  # 按 slot_index 排序 (0=rear, 1=right, 2=left)
-        slot_names = ["rear", "right", "left"]
-
-        for i, dev in enumerate(EXPECTED_DEVICES):
-            pwm_path = _find_pwm_chip(dev)
-            if pwm_path is None:
-                rospy.logfatal("PWM 设备 %s 未找到；请检查 device-tree overlay 和 init_pwm.sh", dev)
-                raise SystemExit(1)
-
-            # 检查必要文件可写
-            for fname in ("period", "duty_cycle", "polarity", "enable"):
-                fpath = f"{pwm_path}/{fname}"
-                if not os.access(fpath, os.W_OK):
-                    rospy.logfatal("PWM 文件不可写: %s。请先运行 sudo bash init_pwm.sh", fpath)
-                    raise SystemExit(1)
-
-            # 只读检查 period 和 polarity
-            period_val = _read_text(f"{pwm_path}/period")
-            polarity_val = _read_text(f"{pwm_path}/polarity")
-            if period_val != str(PWM_PERIOD_NS):
-                rospy.logwarn("PWM %s: period=%s (期望 %d)。init_pwm.sh 是否已运行？",
-                              pwm_path, period_val, PWM_PERIOD_NS)
-            if polarity_val != "normal":
-                rospy.logwarn("PWM %s: polarity=%s (期望 normal)", pwm_path, polarity_val)
-
-            ch = PWMChannel(pwm_path, slot_names[i])
-            self.channels.append(ch)
-            rospy.loginfo("slot %d (%s): %s, duty=%s, enable=%s",
-                          i + 1, slot_names[i], pwm_path,
-                          ch.read_duty(), ch.read_enable())
-
-        # ROS 服务
-        rospy.Service("SetServoDuty", SetServoDuty, self._handle_set_duty)
-        rospy.loginfo("Service /SetServoDuty ready.")
-
-        # 状态发布
-        self.status_pub = rospy.Publisher("servo_debug/status", Float32MultiArray, queue_size=10)
-        rospy.Timer(rospy.Duration(0.1), self._publish_status)  # 10Hz
-
-        rospy.loginfo("servo_debug_node 启动完成，等待远程调试连接。")
+            raise RuntimeError('Orange Pi 5 Plus required')
+        self.hardware_lock = HardwareLock()
+        try:
+            # Acquire before ROS registration can replace a same-name node.
+            rospy.init_node('servo_debug_node', anonymous=False)
+            channels = []
+            for device, name in zip(EXPECTED_DEVICES, ['rear', 'right', 'left']):
+                path = _find_pwm_chip(device)
+                if path is None:
+                    raise RuntimeError('PWM device unavailable: ' + device)
+                for attr in ['period', 'polarity', 'enable', 'duty_cycle']:
+                    if not os.access(path + '/' + attr, os.W_OK):
+                        raise RuntimeError('PWM not writable; run init_pwm.sh: ' + path)
+                if (_read_text(path + '/period') != str(PWM_PERIOD_NS)
+                        or _read_text(path + '/polarity') != 'normal'
+                        or _read_text(path + '/enable') != '0'):
+                    raise RuntimeError('require 20ms/normal/disabled; run init_pwm.sh')
+                channels.append(PWMChannel(path, name))
+            self.channels = channels
+            self.transactions = ServoTransactions(channels)
+            rospy.on_shutdown(self.cleanup)
+            rospy.Service('/SetServoDuty', SetServoDuty, self._handle_set_duty)
+            rospy.Service('/servo_debug/stop', Trigger, self._handle_stop)
+            rospy.Service('/servo_debug/shutdown', Trigger, self._handle_shutdown)
+            self.status_pub = rospy.Publisher('/servo_debug/status', Float32MultiArray, queue_size=10)
+            rospy.Timer(rospy.Duration(0.1), self._publish_status)
+        except BaseException:
+            if hasattr(self, 'transactions'):
+                self.cleanup()
+            self.hardware_lock.close()
+            raise
 
     def _handle_set_duty(self, req):
-        resp = SetServoDutyResponse()
-        slot = req.slot
-        duty = int(req.duty_cycle_ns)
-        hold = bool(req.hold)
+        ok, actual, message = self.transactions.set(req.slot, int(req.duty_cycle_ns), bool(req.hold))
+        return SetServoDutyResponse(success=ok, actual_duty_ns=actual, message=message)
 
-        if slot < 1 or slot > 3:
-            resp.success = False
-            resp.message = f"slot 必须是 1,2,3; got {slot}"
-            return resp
+    def _handle_stop(self, req):
+        ok, message = self.transactions.stop()
+        return TriggerResponse(success=ok, message=message)
 
-        if duty < DUTY_MIN_NS or duty > DUTY_MAX_NS:
-            resp.success = False
-            resp.message = f"duty_cycle_ns {duty} 超出安全范围 [{DUTY_MIN_NS}, {DUTY_MAX_NS}]"
-            return resp
-
-        ch = self.channels[slot - 1]
-        rospy.loginfo("SET slot=%d(%s) duty=%d hold=%s", slot, ch.slot_name, duty, hold)
-        ok, actual, msg = ch.safe_pulse(duty, hold=hold, wait_sec=0.3)
-        resp.success = ok
-        resp.message = msg
-        resp.actual_duty_ns = actual
+    def _handle_shutdown(self, req):
+        ok, message = self.transactions.stop(shutdown=True)
         if ok:
-            rospy.loginfo("  -> ok (actual duty=%d)", actual)
-        else:
-            rospy.logerr("  -> FAIL: %s", msg)
-        return resp
+            timer = threading.Timer(0.1, rospy.signal_shutdown, args=['explicit servo debug shutdown'])
+            timer.daemon = True
+            timer.start()
+        return TriggerResponse(success=ok, message=message)
+
+    def cleanup(self):
+        ok, message = self.transactions.stop(shutdown=True)
+        if not ok:
+            rospy.logerr('PWM shutdown unconfirmed: %s', message)
+        return ok
 
     def _publish_status(self, event):
-        """发布当前所有通道的 duty 和 enable 状态。"""
         msg = Float32MultiArray()
-        # [rear_duty, right_duty, left_duty, rear_en, right_en, left_en]
-        data = []
-        for ch in self.channels:
-            data.append(float(ch.read_duty()))
-            data.append(1.0 if ch.read_enable() else 0.0)
-        msg.data = data
+        msg.data = [value for ch in self.channels
+                    for value in [float(ch.read_duty() or 0), 1.0 if ch.read_enable() else 0.0]]
         self.status_pub.publish(msg)
 
     def run(self):
-        rospy.spin()
+        try:
+            rospy.spin()
+        finally:
+            self.cleanup()
+            self.hardware_lock.close()
 
 
-if __name__ == "__main__":
-    try:
-        ServoDebugNode().run()
-    except SystemExit:
-        pass
-    except rospy.ROSInterruptException:
-        pass
-    except Exception as exc:
-        rospy.logfatal("servo_debug_node 异常退出: %s", exc)
-        raise
+if __name__ == '__main__':
+    ServoDebugNode().run()

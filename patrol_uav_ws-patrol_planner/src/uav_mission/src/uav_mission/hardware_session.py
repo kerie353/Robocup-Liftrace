@@ -65,7 +65,7 @@ def run_session(a,settings,rig,startup,generate,launch_package,launch_prefix='',
         encoded=json.dumps(run_metadata)
         (out/'run_metadata.json').write_text(encoded)
         metadata_pub.publish(String(data=encoded))
-    children=[];files=[];bag=None
+    children=[];files=[];bag=None;mapping_recording=None
     env=os.environ.copy();env['ROS_LOG_DIR']=str(out/'roslog')
     def launch(name,args):
         stream=(out/(name+'.log')).open('w');files.append(stream)
@@ -73,11 +73,18 @@ def run_session(a,settings,rig,startup,generate,launch_package,launch_prefix='',
     def interrupted(*unused):raise KeyboardInterrupt()
     signal.signal(signal.SIGINT,interrupted);signal.signal(signal.SIGTERM,interrupted)
     try:
+        if a.mode=='flight':
+            try:
+                from uav_mission.freedom_recording import start_mapping_recording
+                mapping_recording=start_mapping_recording(out,settings,dict(run_metadata,source_root=str(a.root)))
+            except Exception as error:
+                print('MAPPING_RECORDING_WARNING: '+str(error),flush=True)
         bag=TrialBag(out,settings,env);bag.start();record_metadata()
         local=launch('localization',['start_mapping:=false','map_frame:='+startup['frame'],'mapping_profile:='+settings.get('mapping_profile','high'),'alignment_mode:='+settings.get('alignment_mode','measured'),'enable_control_output:='+str(a.mode=='flight').lower(),'body_to_imu_xyz:='+' '.join(map(str,rig['body_to_imu_xyz'])),'imu_to_camera_z:='+str(rig['imu_to_camera_xyz'][2]),'camera_quat_xyzw:='+' '.join(map(str,rig['camera_quat_xyzw'])),
             'landing_touchdown_setpoint_topic:='+settings.get('landing_offboard', {}).get('setpoint_topic', '/navigation/landing_setpoint_touchdown')])
         until=time.monotonic()+float(settings.get("initialization_timeout",90));reference=None;last_wait_log=0.
         while time.monotonic()<until:
+            if mapping_recording:mapping_recording.check()
             if local.poll() is not None:raise RuntimeError('Localization launch exited; inspect localization.log')
             with lock:
                 s=state[0];c=camera[0];now=rospy.Time.now().to_sec()
@@ -118,6 +125,7 @@ def run_session(a,settings,rig,startup,generate,launch_package,launch_prefix='',
             return True
         until=time.monotonic()+float(startup['map_timeout'])
         while time.monotonic()<until:
+            if mapping_recording:mapping_recording.check()
             if any(child.poll() is not None for child in children):raise RuntimeError('Localization/mapping launch exited before map readiness')
             aligned=check_mapping_alignment(allow_pending=True)
             if aligned and warmup.ready(rospy.Time.now().to_sec()):break
@@ -152,6 +160,7 @@ def run_session(a,settings,rig,startup,generate,launch_package,launch_prefix='',
         control_ready_sub=rospy.Subscriber('/navigation/setpoint_mission',PoseStamped,lambda msg:control_rx.__setitem__(0,time.monotonic()),queue_size=1)
         ready_until=time.monotonic()+60
         while time.monotonic()<ready_until:
+            if mapping_recording:mapping_recording.check()
             if any(child.poll() is not None for child in children):raise RuntimeError('Application failed before model readiness')
             aligned=check_mapping_alignment(allow_pending=True)
             if (aligned and not vision_ready.missing(rospy.Time.now().to_sec())
@@ -180,6 +189,7 @@ def run_session(a,settings,rig,startup,generate,launch_package,launch_prefix='',
         while not rospy.is_shutdown():
             if any(c.poll() is not None for c in children):raise RuntimeError('A launch exited; inspect logs')
             bag.check()
+            if mapping_recording:mapping_recording.check()
             s=state[0];e=extended[0]
             if (auto_enabled and s is not None and s.connected and s.armed and not auto_cancelled
                     and 0<=time.monotonic()-state_rx[0]<float(startup['state_max_age'])):
@@ -234,6 +244,7 @@ def run_session(a,settings,rig,startup,generate,launch_package,launch_prefix='',
                     try:child.wait(timeout=25)
                     except subprocess.TimeoutExpired:os.killpg(child.pid,signal.SIGTERM);child.wait(timeout=10)
         finally:
+            if mapping_recording:mapping_recording.close()
             if bag is not None:bag.close()
             for stream in files:stream.close()
         s=state[0];e=extended[0]

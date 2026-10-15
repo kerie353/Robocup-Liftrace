@@ -157,10 +157,17 @@ def main():
     recording_log=(output/'recorder.log').open('w')
     recorder=subprocess.Popen([sys.executable,str(HERE/'record_diagnostics.py'),'--output',str(output/'recording'),
                                '--config',str(HERE/'recording.yaml')],stdout=recording_log,stderr=subprocess.STDOUT,start_new_session=True)
+    mapping_recording=None
+    try:
+        from uav_mission.freedom_recording import start_mapping_recording
+        mapping_recording=start_mapping_recording(output,c,dict(route='low_observation',profile=args.profile,source_root=str(ROOT)),expected_mapper=False)
+    except Exception as error:
+        print('MAPPING_RECORDING_WARNING: '+str(error),flush=True)
     controller=None
     try:
         until=time.monotonic()+90;last_print=0.
         while not stopping.is_set() and time.monotonic()<until and not rospy.is_shutdown():
+            if mapping_recording:mapping_recording.check()
             with lock:
                 now=rospy.Time.now().to_sec();wall=time.monotonic()
                 state,rx=data.get('state',(None,0))
@@ -233,6 +240,7 @@ def main():
             if not announced and controller.stage=='READY' and connected and fresh and wall-controller.ready_at>=c['warmup_seconds']:
                 print('READY_FOR_MANUAL_ARM_AND_OFFBOARD (pilot checks still apply)',flush=True);announced=True
             if (stopping.is_set() or controller.ever_started) and state_fresh and not armed:break
+            if mapping_recording:mapping_recording.check()
             next_tick+=1/30
             delay=next_tick-time.monotonic()
             if delay>0:time.sleep(delay)
@@ -245,6 +253,7 @@ def main():
             try:recorder.wait(timeout=30)
             except subprocess.TimeoutExpired:
                 print('Recorder still finalizing; inspect its PID '+str(recorder.pid),flush=True)
+        if mapping_recording:mapping_recording.close()
         recording_log.close()
         if controller:
             (output/'ending.json').write_text(json.dumps(dict(stage=controller.stage,reason=controller.reason,

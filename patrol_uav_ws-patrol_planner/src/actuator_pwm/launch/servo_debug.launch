@@ -1,24 +1,6 @@
 <?xml version="1.0"?>
-<!--
-实机舵机调试启动文件 (Orange Pi 5 Plus)。
-
-启动内容:
-  1. pwm_node1: 现有 C++ PWM 节点（只读被动检查，不主动写入）
-  2. servo_debug_node: 新增 Python 调试节点（提供 SetServoDuty 服务）
-
-前提: 已运行 sudo bash init_pwm.sh (设置 PWM period/权限)
--->
+<!-- Debug and raw PWM services are mutually exclusive. Run init_pwm.sh first. -->
 <launch>
-  <!-- loaded mechanism: leave false to avoid explicit mechanical reset at startup -->
-  <arg name="initialize_on_startup" default="false" />
-
-  <node name="servo_controller1" pkg="actuator_pwm" type="pwm_node1" output="screen">
-    <param name="initialize_on_startup" type="bool" value="$(arg initialize_on_startup)" />
-    <remap from="Servo" to="/legacy/Servo_raw" />
-  </node>
-
   <node name="servo_debug_node" pkg="actuator_pwm" type="servo_debug_node.py"
-        output="screen" required="true">
-    <!-- 后端在启动时会再次做 Orange Pi 硬件和 PWM 权限检查 -->
-  </node>
+        output="screen" required="true" />
 </launch>

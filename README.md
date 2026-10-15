@@ -56,3 +56,6 @@ UAV_VISION_MODEL_PATH=/absolute/path/best.pt SIM_STORAGE_GUARD_PATH=/mnt/f SIM_N
 
 
 2026-09-09最新记录策略：后续无头运行只留日志/关键数据，关闭机载录像、俯视录像、桌面录屏和全场bag，在线机载图像仍供视觉算法使用。已有R64验收录像保留，未删除。
+
+
+2026-10-15：新增 [FreeDOM 自动建图记录与下载](docs/FREEDOM_MAPPING_RECORDING.md)，三个受支持的 flight 入口自动记录，异常只告警。需配套 WorkBench 分支使用；本次为源码与离线验证交付，未编译、部署或实机验收。

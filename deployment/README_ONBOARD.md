@@ -30,3 +30,8 @@ R64矩阵原始7/10完整PASS，seed3近地落地仍失败；本包不是实机�
 
 
 2026-09-28：当前入口默认五分类候选元数据。权重单独交付，不随git克隆；以打包清单的实际文件名为准。新RKNN须配套五类metadata，回退旧权重时也须显式回退六类metadata。工具链模拟器验证不替代板端NPU实测。
+
+
+## 2026-10-15 FreeDOM 自动建图记录（待配套升级验收）
+
+三个受支持的 flight 入口自动启动独立原频记录，写入 logs/<run>/mapping/；preview 不启动。新增记录故障仅告警，原飞行检查保持原有行为。默认 LZ4 分卷约 512 MiB、应用队列 64 MiB、每轮约 8 GiB、剩余空间底线 2 GiB，可由对应 settings 顶层 mapping_recording 覆盖字节数限制。保留现有 ROS Noetic 环境及 rosbag/roslib/roslz4 依赖，板端与工作台需配套升级。通过工作台日志页单独取回原 bag、配置和地图并在 PC 导出 PCD；新目录不自动占用默认 Wi-Fi 同步。详见 [板端使用说明](../docs/FREEDOM_MAPPING_RECORDING.md) 与 [实现验证](../docs/verification/freedom_mapping_recording_20261015/REPORT.md)。本轮未编译、部署或实机验收。

@@ -47,6 +47,8 @@ def apply_site_profile(settings, profile):
         allowed.update(('landing_xy', 'landing_handoff_mode', 'landing_handoff_status_topic', 'landing_posctl', 'landing_alignment_mode', 'landing_descent_mode', 'landing_descent_speed_mps', 'landing_offboard'))
     if settings.get('mode') in ('low_multi','low_multi_full'):
         allowed.update(('search_waypoints_xy', 'landing_xy'))
+    if settings.get('trial_kind') in ('full_mission','low_multi_corridor'):
+        allowed.add('low_agl')
     if settings.get('trial_kind') in ('corridor_landing','full_mission','low_multi_corridor'):
         allowed.update(('corridor_waypoints','corridor_geometry'))
     if not isinstance(profile,dict) or set(profile)-allowed:
@@ -272,6 +274,10 @@ def generate(root,out,settings,fc_xyz,rig):
     from uav_mission.navigation_following_config import navigation_following_profile
     runtime['following_speed_profile']=navigation_following_profile(settings.get('following_speed_profile'))
     if mode=='landing':
+        # 03 starts directly near H: use 08's final near-H following distance
+        # even on route leg zero. The manager otherwise rewrites it to 1.0 m,
+        # beyond this standalone trial's 0.75 m planner admission limit.
+        runtime['following_speed_profile']['cruise_lead_m']=runtime['following_speed_profile']['corridor_lead_m']
         hx,hy=settings['landing_xy'];transit=ground+settings['landing_transit_agl']
         m.update(landing_xy=[x+hx,y+hy],return_altitude=capture,post_delivery_route=[point(max(.6,hx-.7),hy,transit),point(hx,hy,transit),point(hx,hy,capture)])
     if settings.get('trial_kind') in ('corridor_landing','full_mission','low_multi_corridor'):
@@ -291,6 +297,10 @@ def generate(root,out,settings,fc_xyz,rig):
     runtime['high_view_probe']=dict(config=dict(ground_z=ground,high_agl=settings['high_agl'],low_agl=settings['low_agl'],staging_xy=[x+area['staging_xy'][0],y+area['staging_xy'][1]],survey_xy=[point(a,b,0)[:2] for a,b in area['survey_xy']],source_key='board-inherited-camera-static-start'),camera_info_topic=settings.get('camera_info_topic','/camera/camera_info'))
     runtime['high_view_probe']['low_stage_parameters']=[dict(name=key,value=value) for key,value in {'/external_planner_max_command_z':max(ground+1.85,capture+.1) if h_landing else ground+1.85,'/fast_planner_node/sdf_map/virtual_ceil_height':(ground+2. if ceiling_enabled else -.1),'/fast_planner_node/fsm/goal_adjustment_radius':.15}.items()]
     runtime['high_view_full']=dict(policy=dict(high_min_agl=max(1.8,settings['high_agl']-.2),high_max_agl=settings['high_agl']+.2,coarse_enabled=True,coarse_min_confidence=.75,coarse_interrupt_min_interval_ns=100000000,coarse_interrupt_max_gap_ns=1000000000,coarse_interrupt_consistency_m=.5,interrupt_refined_classes=[],recheck_observe_seconds=5.,recheck_shift_after_seconds=1.,recheck_shift_radius_m=.5,candidate_min_streak=1,min_interval_ns=100000000,min_span_ns=200000000,max_uncertainty_m=.45,direct_descent=True,descent_radius_m=1.,descent_max_candidates=9,survey_stall_seconds=8.,survey_progress_m=.15,survey_alternative_radius_m=.3),grid=dict(bounds=bounds,resolution=.10,inflation=.25),boundary_policy=dict(enabled=True,bounds=target_bounds))
+    if settings.get('trial_kind')=='full_mission' and settings.get('survey_policy'):
+        from uav_mission.flight_settings import validate_patch
+        patch=validate_patch({'survey_policy':settings['survey_policy']},'08_full_mission')
+        runtime['high_view_full']['policy'].update(patch['survey_policy'])
     resume_enabled=settings.get('resume_survey_enabled',False)
     if type(resume_enabled) is not bool:
         raise ValueError('resume_survey_enabled must be boolean')

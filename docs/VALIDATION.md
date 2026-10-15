@@ -29,3 +29,8 @@ R60先导seed11：**完整PASS37/37**，269.748 ROS s，三投/三恢复、9航�
 仿真三投是视觉、任务与mock执行确认，不是机械带载实投。笔记本SITL、板端离线RKNN、板端实时链、实机飞行是不同验收范围。
 
 完整集中分析与合法性标记见[11轮报告](verification/r64_matrix/REPORT.md)，新随机化工具范围见[说明](verification/r64_randomization/README.md)。旧包及旧验收按生成时的源码阅读，最新交付索引在deliverables/README.md。
+
+
+## 2026-10-15 FreeDOM 记录与下载（离线范围）
+
+板端 16 项、配套工作台 44 项，共 60 项 Python 离线测试及前端/静态检查通过；[报告与原始输出](verification/freedom_mapping_recording_20261015/REPORT.md)。未编译，未运行 ROS 原生录制/LZ4、板端实时性能或实机飞行；不作为新增飞行验收结果。后续步骤见 [地面检查与验收范围](FREEDOM_MAPPING_RECORDING.md)。

@@ -21,7 +21,7 @@ class CompetitionCommandTests(unittest.TestCase):
 
     def test_independent_default_is_not_test_site(self):
         command = self.command()
-        self.assertEqual(command, 'bash deployment/competition/start.sh preview --site-config deployment/competition/field.example.yaml')
+        self.assertEqual(command, 'bash deployment/competition/start.sh preview --site-config deployment/competition/field_10x10_default.yaml')
         self.assertNotIn('board_trials', command)
         self.assertNotIn('site_20260928', command)
         self.assertNotIn('--motion-', command)

@@ -8,6 +8,10 @@ BASE=ROOT/'deployment/board_trials_4x4'
 class MotionProfiles(unittest.TestCase):
     def config(self,trial):
         s=yaml.safe_load((BASE/TRIAL_FOLDERS[trial]/'settings.yaml').read_text())
+        if trial=='low_coverage_full':
+            from trial_config import load_trial_settings,apply_site_profile
+            s=load_trial_settings(ROOT,TRIAL_FOLDERS[trial])
+            apply_site_profile(s,yaml.safe_load((BASE/TRIAL_FOLDERS[trial]/'site_waypoint_map_20261015.yaml').read_text()))
         if trial in ('corridor_landing','full_mission'):
             s.update(corridor_waypoints=[dict(x=.6,y=0,agl=.9),dict(x=1.2,y=0,agl=.9),dict(x=1.8,y=0,agl=.9),dict(x=2.4,y=0,agl=.9)],landing_xy=[2.8,0])
         return s

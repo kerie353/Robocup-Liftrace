@@ -97,6 +97,10 @@ class TrialTests(unittest.TestCase):
         rig=yaml.safe_load((base/'common/uav_board_trials/config/known_rig.yaml').read_text())
         for settings_file in sorted(base.glob('*/settings.yaml')):
             settings=yaml.safe_load(settings_file.read_text())
+            if settings_file.parent.name=='10_low_coverage_full':
+                from trial_config import load_trial_settings,apply_site_profile
+                settings=load_trial_settings(ROOT,settings_file.parent.name)
+                apply_site_profile(settings,yaml.safe_load((settings_file.parent/'site_waypoint_map_20261015.yaml').read_text()))
             dropping=settings['mode'] not in ('landing','memory_only','high_speed_capture')
             self.assertAlmostEqual(settings['drop_agl'],.40 if dropping else .6)
             if settings.get('trial_kind') in ('corridor_landing','full_mission'):

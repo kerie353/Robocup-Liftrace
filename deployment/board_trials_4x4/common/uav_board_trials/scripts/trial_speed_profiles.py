@@ -6,7 +6,7 @@ import yaml
 def apply_speed_profile(root, settings, trial, profile):
     if profile not in ('limited', 'competition'):
         raise ValueError('Unknown speed profile')
-    low_multi=trial=='low_multi' and settings.get('trial_kind')=='low_multi_corridor'
+    low_multi=trial in ('low_multi','low_coverage_full') and settings.get('trial_kind')=='low_multi_corridor'
     if not low_multi and (trial != 'full_mission' or settings.get('trial_kind') != 'full_mission'):
         raise ValueError('--speed-profile only supports 08 full_mission')
     settings['speed_profile'] = profile

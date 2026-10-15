@@ -9,6 +9,10 @@ roslaunch.substitution_args._rospack=rospkg.RosPack(ros_paths=[str(R/'vision_ws/
 rows=[]
 for folder in TRIAL_FOLDERS.values():
     s=yaml.safe_load((R/'deployment/board_trials_4x4'/folder/'settings.yaml').read_text());rig=yaml.safe_load((P/'config/known_rig.yaml').read_text())
+    if folder=='10_low_coverage_full':
+        from trial_config import load_trial_settings,apply_site_profile
+        s=load_trial_settings(R,folder)
+        apply_site_profile(s,yaml.safe_load((R/'deployment/board_trials_4x4'/folder/'site_waypoint_map_20261015.yaml').read_text()))
     if folder in ('04_corridor_landing','08_full_mission'):
         # Test fixture only; the shipped settings file remains empty.
         s['corridor_waypoints']=[dict(x=.6,y=0),dict(x=1.5,y=.4)]

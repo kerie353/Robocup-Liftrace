@@ -3,7 +3,7 @@ def evaluate(supervisor,latest,settings):
     mission=latest.get('mission',{});high=latest.get('high',{})
     trial=supervisor.get('trial');committed=mission.get('committed_slots',0)
     count=settings.get('delivery_count',2)
-    expected={'visual_interrupt':1,'low_multi':count,'full_mission':3}.get(trial,high.get('trial_memory_count',0))
+    expected={'visual_interrupt':1,'low_multi':count,'low_coverage_full':3,'full_mission':3}.get(trial,high.get('trial_memory_count',0))
     if trial in ('landing','corridor_landing','memory_only','high_speed_capture'):expected=0
     landed=supervisor.get('end_reason')=='landed_after_flight'
     healthy=not mission.get('mission_failed',False)
@@ -39,7 +39,7 @@ def evaluate(supervisor,latest,settings):
                  and 1<=high.get('trial_memory_count',0)<=3)
     else:
         success=landed and (local_landed or manual_landed) and 1<=expected<=3 and committed==expected
-    if trial=='low_multi' and settings.get('trial_kind')=='low_multi_corridor':
+    if trial in ('low_multi','low_coverage_full') and settings.get('trial_kind')=='low_multi_corridor':
         success=(landed and healthy and mission.get('phase')=='COMPLETE' and committed==expected
                  and mission.get('post_delivery_route_complete') is True)
     return dict(status=('CAPTURED' if trial=='high_speed_capture' else 'PASS') if success else 'INCOMPLETE',trial=trial,

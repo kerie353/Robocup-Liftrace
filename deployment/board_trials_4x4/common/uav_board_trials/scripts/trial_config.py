@@ -11,6 +11,7 @@ TRIAL_FOLDERS = {
     'low_multi': '05_low_multi', 'high_priority': '06_high_priority',
     'memory_only': '07_memory_only', 'full_mission': '08_full_mission',
     'high_speed_capture': '09_high_speed_capture',
+    'low_coverage_full': '10_low_coverage_full',
 }
 HIGH_MODES = ('high_view', 'high_priority', 'memory_only', 'high_view_full', 'high_speed_capture')
 H_MODES = ('landing', 'high_view_full', 'low_multi_full')
@@ -24,6 +25,10 @@ def load_trial_settings(root, folder):
     """
     base = Path(root) / 'deployment/board_trials_4x4'
     settings = yaml.safe_load((base / folder / 'settings.yaml').read_text())
+    if folder == '10_low_coverage_full':
+        from trial_low_coverage import inherit_full_settings
+        full = yaml.safe_load((base / '08_full_mission/settings.yaml').read_text())
+        return inherit_full_settings(full, settings)
     if folder != '03_h_landing':
         return settings
     full = yaml.safe_load((base / '08_full_mission/settings.yaml').read_text())
@@ -51,6 +56,8 @@ def apply_site_profile(settings, profile):
         allowed.add('low_agl')
     if settings.get('trial_kind') in ('corridor_landing','full_mission','low_multi_corridor'):
         allowed.update(('corridor_waypoints','corridor_geometry'))
+    if settings.get('backup_profile') == 'low_coverage_full':
+        allowed.update(('landing_transit_agl','landing_capture_agl','coverage_pattern','coverage_rectangles','coverage_cross_inset','coverage_lane_spacing','coverage_scan_axis','coverage_loop_inset'))
     if not isinstance(profile,dict) or set(profile)-allowed:
         raise ValueError('Unsupported site profile key')
     if settings['mode'] in H_MODES and 'terminal_hover_agl' in profile:
@@ -59,6 +66,8 @@ def apply_site_profile(settings, profile):
     return settings
 
 def mapping_profile(settings):
+    if settings.get('backup_profile') == 'low_coverage_full':
+        return 'coverage'
     if settings['mode'] in HIGH_MODES:
         return 'high'
     return 'corridor' if settings.get('trial_kind') == 'corridor_landing' else 'low'
@@ -83,7 +92,7 @@ def flight_geometry(settings):
     def inside(point,box=bounds):
         return isinstance(point,(list,tuple)) and len(point)==2 and all(finite(t) for t in point) and box[0]<=point[0]<=box[1] and box[2]<=point[1]<=box[3]
     if not inside([0.,0.]) or not inside(area["staging_xy"]):raise ValueError("Origin/staging outside flight_area")
-    if not all(inside(v,target) for v in ([bounds[0],bounds[2]],[bounds[1],bounds[3]])):
+    if settings.get('backup_profile') != 'low_coverage_full' and not all(inside(v,target) for v in ([bounds[0],bounds[2]],[bounds[1],bounds[3]])):
         raise ValueError("target_bounds must contain center_bounds")
     if not all(inside(v) for v in ([search[0],search[2]],[search[1],search[3]])):raise ValueError("Search bounds outside flight_area")
     if 'survey_pattern' in settings:
@@ -92,6 +101,8 @@ def flight_geometry(settings):
         old=area['survey_xy'];xs=[min(v[0] for v in old),max(v[0] for v in old)]
         if settings['survey_pattern']=='snake3':xs.insert(1,sum(xs)/2)
         area['survey_xy']=survey_route(settings['survey_pattern'],xs,min(v[1] for v in old),max(v[1] for v in old),start_high=old[0][1]>sum(v[1] for v in old)/len(old))
+    if settings.get('backup_profile') == 'low_coverage_full' and not all(inside(v,target) for v in ([search[0],search[2]],[search[1],search[3]])):
+        raise ValueError('Coverage search bounds must lie within target_bounds')
     points=area["survey_xy"]
     if not isinstance(points,list) or len(points)<(2 if settings.get('mode')=='high_speed_capture' else 3) or any(not inside(v) for v in points):raise ValueError("Survey point outside flight_area")
     if settings.get('mode')=='high_speed_capture':
@@ -111,6 +122,9 @@ def validate_settings(settings):
     drop_descent_parameters(settings)
     drop_horizontal_compensation_mode(settings)
     release_heights(settings)
+    from trial_low_coverage import is_low_coverage, validate_low_coverage, coverage_waypoints
+    backup = is_low_coverage(settings)
+    validate_low_coverage(settings)
     lead=settings.get('takeoff_z_lead_m',0.)
     if isinstance(lead,bool) or not isinstance(lead,(int,float)) or not math.isfinite(lead) or not (lead==0 or .4<=lead<=.6):
         raise ValueError('takeoff_z_lead_m must be 0 or [0.4, 0.6] metres')
@@ -160,7 +174,7 @@ def validate_settings(settings):
     if 'following_speed_profile' in settings:
         from uav_mission.execution_speed import FollowingSpeed
         FollowingSpeed(**settings['following_speed_profile'])
-    for key,lo,hi in [('low_agl',1.,1.8),('high_agl',2.,2.8),('landing_transit_agl',.5,1.8),('landing_capture_agl',.5,2.0),('cruise_speed',.1,1.2 if fast else .5),('cruise_acceleration',.1,1.0 if fast else .5)]:
+    for key,lo,hi in [('low_agl',1.,1.9 if backup else 1.8),('high_agl',2.,2.8),('landing_transit_agl',.5,1.8),('landing_capture_agl',.5,2.0),('cruise_speed',.1,1.2 if fast else .5),('cruise_acceleration',.1,1.0 if fast else .5)]:
         v=settings.get(key)
         if isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) or not lo<=v<=hi:
             raise ValueError('Invalid '+key)
@@ -181,7 +195,7 @@ def validate_settings(settings):
     if not 30<=float(settings.get('initialization_timeout',90))<=300:raise ValueError('invalid initialization timeout')
     if type(settings.get('auto_start_after_arm',False)) is not bool:raise ValueError('invalid auto start')
     max_agl=settings.get('max_agl',2.9)
-    max_agl_limit=3.2 if settings['mode']=='high_view_full' else 3.0
+    max_agl_limit=3.2 if settings['mode']=='high_view_full' or backup else 3.0
     if isinstance(max_agl,bool) or not isinstance(max_agl,(int,float)) or not math.isfinite(max_agl) or not 2.<=max_agl<=max_agl_limit:raise ValueError('invalid max_agl')
     if settings['high_agl']>max_agl:raise ValueError('high altitude exceeds cap')
     if 'terminal_hover_agl' in settings and not .25<=settings['terminal_hover_agl']<=.5:raise ValueError('invalid terminal hover')
@@ -202,10 +216,13 @@ def validate_settings(settings):
                     survey_xy=tuple(tuple(v) for v in area['survey_xy']),
                     staging_xy=tuple(area['staging_xy']))
 
-    line=settings.get('search_line_x',[.6,1.2,1.8,2.4,3.0])
+    if backup:
+        coverage_waypoints(settings,area)
+    search_min_x=cb[0] if backup else max(.35,cb[0])
+    line=([area['search_bounds'][0],area['search_bounds'][1]] if backup else settings.get('search_line_x',[.6,1.2,1.8,2.4,3.0]))
     if (not isinstance(line,list) or len(line)<2 or
             any(isinstance(v,bool) or not isinstance(v,(int,float)) or
-                not math.isfinite(v) or not max(.35,cb[0])<=v<=cb[1] for v in line) or
+                not math.isfinite(v) or not search_min_x<=v<=cb[1] for v in line) or
             any(a>=b for a,b in zip(line,line[1:]))):
         raise ValueError('search_line_x must advance inside flight_area center bounds')
     if 'search_waypoints_xy' in settings:
@@ -214,7 +231,7 @@ def validate_settings(settings):
             raise ValueError('Low multi search requires 2..100 XY waypoints')
         for v in points:
             if (not isinstance(v,list) or len(v)!=2 or any(type(n) not in (int,float) or not math.isfinite(n) for n in v)
-                    or not max(.35,cb[0])<=v[0]<=cb[1] or not cb[2]<=v[1]<=cb[3]):
+                    or not search_min_x<=v[0]<=cb[1] or not cb[2]<=v[1]<=cb[3]):
                 raise ValueError('Low multi search point outside flight_area')
     if settings.get('trial_kind') not in ('corridor_landing','full_mission','low_multi_corridor'):
         return
@@ -259,14 +276,22 @@ def generate(root,out,settings,fc_xyz,rig):
         post_delivery_route=[point(.6,0,low)],post_delivery_parameter_stages=[],early_return_enabled=False,delivery_reserve_per_slot=25.,return_land_reserve=45.,nominal_speed=float(settings['cruise_speed']),motion_action_timeout=float(settings.get('motion_action_timeout',30.)),target_action_timeout=60.)
     runtime.pop('corridor_speed_schedule',None);runtime.pop('fixed_search_region',None)
     sx0,sx1,sy0,sy1=area['search_bounds']
-    runtime['search'].update(min_x=x+sx0,max_x=x+sx1,min_y=y+sy0,max_y=y+sy1,lane_spacing=1.2,altitude=low)
+    from trial_low_coverage import is_low_coverage, coverage_waypoints
+    backup=is_low_coverage(settings)
+    runtime['search'].update(min_x=x+sx0,max_x=x+sx1,min_y=y+sy0,max_y=y+sy1,lane_spacing=settings.get('coverage_lane_spacing',1.2) if backup else 1.2,altitude=low)
     runtime['runtime'].update(start_mode='post_delivery' if mode=='landing' else 'full',mission_id_prefix='board-'+mode)
     # Do not make reaching a distant, possibly occupied endpoint a prerequisite
     # for seeing the target in front. Every shorter leg still uses Fast-Planner.
     line=[point(v,0,low) for v in settings.get('search_line_x',[.6,1.2,1.8,2.4,3.0])]
     if mode in ('low_multi','low_multi_full') and 'search_waypoints_xy' in settings:
         line=[point(a,b,low) for a,b in settings['search_waypoints_xy']]
-    runtime['trial']=dict(mode=mode,waypoints=line,camera_info_topic=settings.get('camera_info_topic','/camera/camera_info'),delivery_count=settings.get('delivery_count',2),actuator_mode=actuator)
+    if backup:
+        xy,coverage_source=coverage_waypoints(settings,area)
+        line=[point(a,b,low) for a,b in xy]
+    runtime['trial']=dict(mode=mode,coverage_full_mission=backup,waypoints=line,camera_info_topic=settings.get('camera_info_topic','/camera/camera_info'),delivery_count=settings.get('delivery_count',2),actuator_mode=actuator)
+    if backup:
+        runtime['trial'].update(coverage_full_mission=True,backup_profile='low_coverage_full',coverage_route_source=coverage_source)
+        runtime['search']['route_revision']='board-low-coverage-full'
     if mode in ('low_multi','low_multi_full'):
         runtime['trial']['corridor_after_delivery']=settings.get('trial_kind')=='low_multi_corridor'
     if mode=='high_speed_capture':
@@ -296,7 +321,7 @@ def generate(root,out,settings,fc_xyz,rig):
     bx0,bx1,by0,by1=area['center_bounds'];bounds=[x+bx0,x+bx1,y+by0,y+by1]
     tx0,tx1,ty0,ty1=area['target_bounds'];target_bounds=[x+tx0,x+tx1,y+ty0,y+ty1]
     runtime['high_view_probe']=dict(config=dict(ground_z=ground,high_agl=settings['high_agl'],low_agl=settings['low_agl'],staging_xy=[x+area['staging_xy'][0],y+area['staging_xy'][1]],survey_xy=[point(a,b,0)[:2] for a,b in area['survey_xy']],source_key='board-inherited-camera-static-start'),camera_info_topic=settings.get('camera_info_topic','/camera/camera_info'))
-    runtime['high_view_probe']['low_stage_parameters']=[dict(name=key,value=value) for key,value in {'/external_planner_max_command_z':max(ground+1.85,capture+.1) if h_landing else ground+1.85,'/fast_planner_node/sdf_map/virtual_ceil_height':(ground+2. if ceiling_enabled else -.1),'/fast_planner_node/fsm/goal_adjustment_radius':.15}.items()]
+    runtime['high_view_probe']['low_stage_parameters']=[dict(name=key,value=value) for key,value in {'/external_planner_max_command_z':max(ground+1.85,low+.25 if backup else ground+1.85,capture+.1) if h_landing else ground+1.85,'/fast_planner_node/sdf_map/virtual_ceil_height':(ground+2. if ceiling_enabled else -.1),'/fast_planner_node/fsm/goal_adjustment_radius':.15}.items()]
     runtime['high_view_full']=dict(policy=dict(high_min_agl=max(1.8,settings['high_agl']-.2),high_max_agl=settings['high_agl']+.2,coarse_enabled=True,coarse_min_confidence=.75,coarse_interrupt_min_interval_ns=100000000,coarse_interrupt_max_gap_ns=1000000000,coarse_interrupt_consistency_m=.5,interrupt_refined_classes=[],recheck_observe_seconds=5.,recheck_shift_after_seconds=1.,recheck_shift_radius_m=.5,candidate_min_streak=1,min_interval_ns=100000000,min_span_ns=200000000,max_uncertainty_m=.45,direct_descent=True,descent_radius_m=1.,descent_max_candidates=9,survey_stall_seconds=8.,survey_progress_m=.15,survey_alternative_radius_m=.3),grid=dict(bounds=bounds,resolution=.10,inflation=.25),boundary_policy=dict(enabled=True,bounds=target_bounds))
     if settings.get('trial_kind')=='full_mission' and settings.get('survey_policy'):
         from uav_mission.flight_settings import validate_patch

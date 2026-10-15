@@ -10,6 +10,11 @@ from mapping_startup import PoseAgreement,MapWarmup,VisionReadiness,startup_tran
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('trial',choices=sorted(TRIAL_FOLDERS));p.add_argument('mode',choices=['preview','flight']);p.add_argument('--root',type=Path,required=True);p.add_argument('--model',type=Path);p.add_argument('--metadata',type=Path);p.add_argument('--check-config',action='store_true');p.add_argument('--site-config',type=Path);p.add_argument('--real-release',action='store_true');p.add_argument('--mapping-startup-config',type=Path);p.add_argument('--capture-speed',type=float,choices=(.5,1.,1.2));p.add_argument('--capture-lighting',choices=('normal','dim','unspecified'));p.add_argument('--motion-optimized',action='store_true');p.add_argument('--survey-pattern',choices=('rectangle','snake2','snake3'))
+    p.add_argument('--coverage-pattern',choices=('lawnmower','nested_rectangles'),help='low_coverage_full route; default lawnmower; rectangles derive from measured bounds unless explicitly supplied')
+    p.add_argument('--coverage-agl',type=float,choices=(1.8,1.9),help='low_coverage_full FC AGL; default 1.8m')
+    p.add_argument('--coverage-lane-spacing',type=float,help='low_coverage_full cross-lane spacing in metres; default 2.6')
+    p.add_argument('--coverage-cross-inset',type=float,help='low_coverage_full cross-scan boundary inset in metres; default 0.6')
+    p.add_argument('--coverage-scan-axis',choices=('x','y'),help='low_coverage_full sweep direction; default y')
     p.add_argument('--resume-survey',choices=('on','off'),help='Override interrupted survey resume for priority/full mission; omit to inherit settings')
     p.add_argument('--landing-alignment-mode',choices=('non_vh','vh'),help='H landing only: non_vh keeps ten-frame capture; vh aligns for 1s; descent policy is selected separately')
     p.add_argument('--speed-profile',choices=('limited','competition'),help='08/low multi: same measured field, explicit planning/following speeds')
@@ -36,14 +41,21 @@ def main():
         if not math.isfinite(float(startup[key])) or float(startup[key])<=0:raise ValueError('invalid mapping startup '+key)
     if a.site_config:
         profile=yaml.safe_load(a.site_config.read_text()) or {}
+        if a.trial=='low_coverage_full':
+            from trial_low_coverage import normalize_coverage_site
+            try:profile=normalize_coverage_site(profile)
+            except ValueError as error:p.error(str(error))
         try:apply_site_profile(settings,profile)
         except ValueError as error:p.error(str(error))
+    from trial_low_coverage import prepare_low_coverage
+    try:prepare_low_coverage(settings,site_provided=a.site_config is not None,height=a.coverage_agl,lane_spacing=a.coverage_lane_spacing,scan_axis=a.coverage_scan_axis,pattern=a.coverage_pattern,cross_inset=a.coverage_cross_inset)
+    except ValueError as error:p.error(str(error))
     if a.speed_profile is not None:
         from trial_speed_profiles import apply_speed_profile
         try:apply_speed_profile(a.root,settings,a.trial,a.speed_profile)
         except ValueError as error:p.error(str(error))
     if a.ordinary_waypoint_dwell is not None:
-        if a.trial not in ('full_mission','low_multi'):p.error('--ordinary-waypoint-dwell only applies to full mission/low multi')
+        if a.trial not in ('full_mission','low_multi','low_coverage_full'):p.error('--ordinary-waypoint-dwell only applies to full mission/low multi')
         settings['ordinary_waypoint_dwell_enabled']=a.ordinary_waypoint_dwell=='on'
     if a.landing_config:
         if settings['mode'] not in ('landing','high_view_full','low_multi_full'):p.error('--landing-config only applies to visual H landing')
@@ -56,7 +68,7 @@ def main():
     if a.landing_alignment_mode is not None:
         settings['landing_alignment_mode']=a.landing_alignment_mode
     if a.flight_config:
-        if a.trial not in ('low_multi','full_mission'):p.error('--flight-config only supports task 2 and module 08')
+        if a.trial not in ('low_multi','full_mission','low_coverage_full'):p.error('--flight-config only supports task 2 and module 08')
         from uav_mission.flight_settings import apply_patch
         try:settings=apply_patch(settings,yaml.safe_load(a.flight_config.read_text()),folder)
         except ValueError as error:p.error(str(error))
@@ -94,6 +106,7 @@ def main():
                 if settings.get('speed_profile')=='competition' else dict(controller_limit_m=.6,traj_target_dist_m=.6,planner_start_max_distance_m=(max(.75,min(settings['cruise_speed'],1.)+.25) if settings['mode']=='high_speed_capture' else .75))),
             following=following,
             corridor=dict(open_lead_m=.6,door_lead_m=.6) if settings.get('corridor_geometry') else None,
+            coverage=(dict(pattern=settings.get('coverage_pattern','lawnmower'),fcu_agl=settings['low_agl'],scan_axis=settings['coverage_scan_axis'],lane_spacing=settings['coverage_lane_spacing'],cross_inset=settings['coverage_cross_inset'],loop_inset=settings['coverage_loop_inset'],normal_route_resume=True) if a.trial=='low_coverage_full' else None),
             drop_agl=settings['drop_agl'],high_agl=settings['high_agl'],
             landing_capture_agl=settings['landing_capture_agl'],
             landing_posctl=settings.get('landing_posctl'), settings=settings)
@@ -288,9 +301,9 @@ def main():
         mission_sub=rospy.Subscriber('/navigation/mission_status',String,mission_status,queue_size=1)
         on_ground_since=None;last_status_log=0.
         auto_enabled=a.mode=='flight' and settings.get('auto_start_after_arm',False)
-        # Module 08 relaxes only the auto-start hover gate; other trials retain theirs.
-        auto_start_height_tolerance=.3 if a.trial=='full_mission' else .15
-        auto_start_stable_duration=.3 if a.trial=='full_mission' else 1.
+        # Full-mission entries share the 08 auto-start hover gate; other trials retain theirs.
+        auto_start_height_tolerance=.3 if a.trial in ('full_mission','low_coverage_full') else .15
+        auto_start_stable_duration=.3 if a.trial in ('full_mission','low_coverage_full') else 1.
         start_attempted=False;auto_cancelled=False;offboard_seen=False;hover_since=None
         while not rospy.is_shutdown():
             if any(c.poll() is not None for c in children):raise RuntimeError('A launch exited; inspect logs')

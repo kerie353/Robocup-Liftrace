@@ -9,7 +9,7 @@ drop_descent_mode4_speed_mps: 0.60  # 模式4最高向下速度，ENU指令为�
 drop_descent_acceleration_mps2: 0.60
 drop_descent_braking_mps2: 0.60
 drop_descent_hold_tolerance_m: 0.015  # 距终点1.5cm切回Z位置保持；非释放门槛
-drop_agl: 0.15
+drop_agl: 0.25  # FC离地目标；释放窗口保持原配置，勿与local Z混用
 release_min_agl: 0.10
 release_max_agl: 0.43
 landing_transit_agl: 1.0

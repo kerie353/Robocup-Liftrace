@@ -6,7 +6,7 @@ P=Path(__file__).resolve().parents[1];root=P.parents[3]
 roslaunch.substitution_args._rospack=rospkg.RosPack(ros_paths=[str(root/'vision_ws/src'),str(root/'patrol_uav_ws-patrol_planner/src'),'/opt/ros/noetic/share','/home/xhj/PX4-Autopilot','/home/xhj/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic'])
 rows=[]
 for trial in TRIAL_FOLDERS:
-    if trial=='high_speed_capture':continue  # Field capture profile has no 4x4 SITL fixture.
+    if trial in ('high_speed_capture','low_coverage_full'):continue  # Field capture profile has no 4x4 SITL fixture.
     with tempfile.TemporaryDirectory() as tmp:
         subprocess.run([sys.executable,str(P/'scripts/prepare_simulation.py'),trial,tmp],check=True,capture_output=True)
         settings=yaml.safe_load((Path(tmp)/'settings.yaml').read_text())

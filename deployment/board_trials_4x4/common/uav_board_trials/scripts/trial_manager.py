@@ -7,6 +7,7 @@ from sensor_msgs.msg import CameraInfo
 from std_msgs.msg import String
 from uav_vision.msg import TargetDetectionArray
 from uav_mission.coverage_route import CoverageRoute
+from uav_mission.mission_runtime import MissionRuntime
 from uav_mission.search_types import Waypoint
 from uav_mission.high_view_probe import ProbeConfig
 from uav_mission.high_view_stage_limits import HighViewStageMixin
@@ -43,6 +44,8 @@ class BoardManager(HighViewStageMixin,base.NavigationMissionManager):
         self._low_limits_applied=None if self._high_stage_parameters is not None else False
         self._probe_limit_switch=None
         if self.mode in ('low_multi','low_multi_full'):
+            if rospy.get_param('~trial/coverage_full_mission',False):
+                return MissionRuntime(ordinary.core,route)
             runtime_class=(MultiDeliveryCorridorRuntime if rospy.get_param('~trial/corridor_after_delivery',False) else MultiDeliveryRuntime)
             return runtime_class(ordinary.core,route,delivery_count=rospy.get_param('~trial/delivery_count',2))
         if self.mode not in HIGH_MODES:return SingleDeliveryRuntime(ordinary.core,route)

@@ -55,6 +55,10 @@ class NavigationFollowingConfig(unittest.TestCase):
         for trial, folder in TRIAL_FOLDERS.items():
             with self.subTest(trial=trial):
                 s = yaml.safe_load((BASE / folder / 'settings.yaml').read_text())
+                if trial == 'low_coverage_full':
+                    from trial_config import load_trial_settings
+                    s=load_trial_settings(ROOT,folder)
+                    apply_site_profile(s,yaml.safe_load((BASE/folder/'site_waypoint_map_20261015.yaml').read_text()))
                 if trial in ('corridor_landing', 'full_mission'):
                     apply_site_profile(s, yaml.safe_load((BASE / '08_full_mission/site_20261007_221730.yaml').read_text()))
                 r, c, o = self.assert_generated(generate, s, rig)
@@ -68,6 +72,8 @@ class NavigationFollowingConfig(unittest.TestCase):
                     self.assertEqual(o['/navigation/planner_bridge/execution/position_only_arrival_dwell'],.3)
                     self.assertFalse(o['/navigation/planner_bridge/execution/position_only_arrival_dwell_enabled'])
                     self.assertEqual(o['/navigation/planner_bridge/execution/arrival_dwell'],.8)
+                elif trial == 'low_coverage_full':
+                    self.assertEqual(o[key],r['trial']['waypoints']+r['mission']['post_delivery_route'])
                 else:
                     self.assertEqual(o[key],[])
 

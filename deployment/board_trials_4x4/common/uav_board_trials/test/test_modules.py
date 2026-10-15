@@ -41,6 +41,10 @@ class Modules(unittest.TestCase):
         rig=yaml.safe_load((BASE/'common/uav_board_trials/config/known_rig.yaml').read_text())
         for trial,folder in TRIAL_FOLDERS.items():
             settings=yaml.safe_load((BASE/folder/'settings.yaml').read_text())
+            if trial=='low_coverage_full':
+                from trial_config import load_trial_settings,apply_site_profile
+                settings=load_trial_settings(ROOT,folder)
+                apply_site_profile(settings,yaml.safe_load((BASE/folder/'site_waypoint_map_20261015.yaml').read_text()))
             if trial in ('corridor_landing','full_mission'):
                 settings.update(corridor_waypoints=[dict(x=.6,y=0),dict(x=2.,y=0)],landing_xy=[2.8,0])
             with tempfile.TemporaryDirectory() as tmp:
@@ -51,6 +55,7 @@ class Modules(unittest.TestCase):
                 for v in runtime['high_view_probe']['low_stage_parameters']:
                     if v['name'].endswith('virtual_ceil_height'):self.assertEqual(v['value'],-.1)
                 for stage in runtime['mission']['post_delivery_parameter_stages']:
+                    if trial=='low_coverage_full' and '/fast_planner_node/sdf_map/virtual_ceil_height' not in stage['parameters']:continue
                     self.assertEqual(stage['parameters']['/fast_planner_node/sdf_map/virtual_ceil_height'],-.1)
     def test_failures_and_stale_landing_handoff_never_pass(self):
         supervisor=dict(trial='visual_interrupt',end_reason='landed_after_flight')

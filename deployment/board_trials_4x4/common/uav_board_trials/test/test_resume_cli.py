@@ -37,6 +37,13 @@ class ResumeCLI(unittest.TestCase):
             settings_path.write_text(yaml.safe_dump(settings))
             original=settings_path.read_text()
             args=['run_trial.py',trial,'preview','--root',str(root),'--check-config']
+            if trial in ('landing','low_coverage_full'):
+                inherited=base/'08_full_mission';inherited.mkdir()
+                shutil.copyfile(BASE/'08_full_mission/settings.yaml',inherited/'settings.yaml')
+            if trial=='low_coverage_full':
+                site=root/'site.yaml'
+                shutil.copyfile(BASE/'10_low_coverage_full/site_waypoint_map_20261015.yaml',site)
+                args+=['--site-config',str(site)]
             if option is not None:args+=['--resume-survey',option]
             seen=[]
             validate=run_trial.validate_settings

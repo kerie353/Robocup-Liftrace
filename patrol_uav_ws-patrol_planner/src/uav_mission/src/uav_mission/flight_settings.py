@@ -2,8 +2,8 @@
 import copy
 import math
 
-DROP_FOLDERS = ('01_visual_interrupt','02_high_view_revisit','05_low_multi','06_high_priority','08_full_mission')
-H_FOLDERS = ('03_h_landing','04_corridor_landing','05_low_multi','08_full_mission')
+DROP_FOLDERS = ('01_visual_interrupt','02_high_view_revisit','05_low_multi','06_high_priority','08_full_mission','10_low_coverage_full')
+H_FOLDERS = ('03_h_landing','04_corridor_landing','05_low_multi','08_full_mission','10_low_coverage_full')
 DROP_FIELDS = {
  'drop_horizontal_compensation_mode': (1,2), 'drop_descent_mode': (1,2,3,4),
  'drop_agl': (.35,1.), 'release_min_agl': (.001,1.1), 'release_max_agl': (.001,1.1),
@@ -34,10 +34,11 @@ def validate_patch(patch, folder):
     if not isinstance(patch,dict) or not patch:raise ValueError('飞行参数不能为空')
     fields={}
     if folder in DROP_FOLDERS or folder=='competition':fields.update(DROP_FIELDS)
-    if folder=='05_low_multi':fields['drop_agl']=(.15,1.)
+    if folder in ('05_low_multi','10_low_coverage_full'):fields['drop_agl']=(.15,1.)
+    if folder=='08_full_mission':fields['drop_agl']=(.25,1.)
     if folder in H_FOLDERS or folder=='competition':fields.update(H_FIELDS)
-    if folder in ('08_full_mission','competition'):fields.update(copy.deepcopy(TASK_FIELDS))
-    if folder=='08_full_mission':fields['ordinary_waypoint_dwell_enabled']=bool
+    if folder in ('08_full_mission','10_low_coverage_full','competition'):fields.update(copy.deepcopy(TASK_FIELDS))
+    if folder in ('08_full_mission','10_low_coverage_full'):fields['ordinary_waypoint_dwell_enabled']=bool
     if folder=='competition':
         fields.update(lane_spacing=(.2,1.2),target_action_timeout=(.001,600.))
         fields['survey_policy']['resume_budget_seconds']=(10.,180.)

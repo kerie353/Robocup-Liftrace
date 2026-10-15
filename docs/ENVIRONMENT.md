@@ -23,3 +23,8 @@ R62 seed11已建图、起飞、搜索、首投并恢复；保留原生相机视�
 
 
 2026-09-09本次维护：[冗余worktree/缓存清理记录](maintenance/CLEANUP_20260909_R64.md)。当前整机两套编译产物保留，旧视觉日志迁入logs/_archive；旧导航来源缓存已清理，后续编译使用当前整机视觉overlay。已fstrim，未离线压缩VHDX，宿主F盘未观测到可用空间增加。
+
+
+## 2026-10-15 自动建图记录运行依赖
+
+Orange Pi 5 Plus 使用既有 ROS Noetic 系统 Python，记录模块复用 rospy/rosbag 并声明 roslib、roslz4 运行依赖；PC 工作台复用 rosbags。不在飞行中安装依赖。本轮仅源码、文档与离线检查，未编译、部署或实机验证；配套版本与资源限制见 [板端说明](FREEDOM_MAPPING_RECORDING.md)。

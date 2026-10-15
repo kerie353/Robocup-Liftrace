@@ -181,7 +181,8 @@ def validate_settings(settings):
     if not 30<=float(settings.get('initialization_timeout',90))<=300:raise ValueError('invalid initialization timeout')
     if type(settings.get('auto_start_after_arm',False)) is not bool:raise ValueError('invalid auto start')
     max_agl=settings.get('max_agl',2.9)
-    if not isinstance(max_agl,(int,float)) or not math.isfinite(max_agl) or not 2.<=max_agl<=3.:raise ValueError('invalid max_agl')
+    max_agl_limit=3.2 if settings['mode']=='high_view_full' else 3.0
+    if isinstance(max_agl,bool) or not isinstance(max_agl,(int,float)) or not math.isfinite(max_agl) or not 2.<=max_agl<=max_agl_limit:raise ValueError('invalid max_agl')
     if settings['high_agl']>max_agl:raise ValueError('high altitude exceeds cap')
     if 'terminal_hover_agl' in settings and not .25<=settings['terminal_hover_agl']<=.5:raise ValueError('invalid terminal hover')
     if type(settings.get('obstacle_columns_enabled',True)) is not bool:raise ValueError('invalid obstacle column flag')

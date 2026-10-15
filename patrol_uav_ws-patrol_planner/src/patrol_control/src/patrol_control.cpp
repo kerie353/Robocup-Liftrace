@@ -1002,7 +1002,8 @@ void LLController::externalLandingTick() {
     const bool handoff_settled = external_landing_handoff_mode_ != "POSCTL" ||
         landingMotionSettled(true, horizontal_error);
     if (uav_pose.pose.position.z <= external_landing_auto_land_height_ &&
-        horizontal_error <= external_landing_alignment_tolerance_ && handoff_settled) {
+        (external_landing_handoff_mode_ == "POSCTL" ||
+         horizontal_error <= external_landing_alignment_tolerance_) && handoff_settled) {
         if (!auto_land) {
             ROS_ERROR_THROTTLE(
                 2.0,
@@ -2441,6 +2442,10 @@ void LLController::load_params() {
         "drop_system/servo_alignment_context_topic", "/uav_vision/alignment_target_context");
     servo_call_timeout_sec_ = nh_.param("drop_system/servo_call_timeout_sec", 10.0);
     drop_recover_without_ack_ = nh_.param("drop_system/recover_without_ack", true);
+    drop_recovery_delay_sec_ = nh_.param("drop_system/recovery_delay_sec", 0.5);
+    if (!std::isfinite(drop_recovery_delay_sec_) || drop_recovery_delay_sec_ < 0.0) {
+        throw std::invalid_argument("drop_system/recovery_delay_sec must be finite and nonnegative");
+    }
     if (!std::isfinite(servo_call_timeout_sec_) || servo_call_timeout_sec_ <= 0.0) {
         throw std::invalid_argument("drop_system/servo_call_timeout_sec must be positive");
     }
@@ -4354,10 +4359,12 @@ bool LLController::highLandingAlignmentReady() {
     const bool ready = landing_high_alignment_window_.update(ros::Time::now().toSec(),
         motion_odom_.header.stamp.toSec(), motion_odom_receipt_.toSec(),
         external_landing_last_mark_stamp_.toSec(), external_landing_last_mark_receipt_.toSec(),
-        xy_error, valid ? velocity.head<2>().norm() : 0.0, valid);
+        xy_error, valid ? velocity.head<2>().norm() : 0.0, valid,
+        external_landing_mark_max_age_sec_);
     if (!ready) ROS_INFO_THROTTLE(1.0,
-        "[ExternalLanding] high alignment waiting: xy=%.4f speed=%.4f valid=%d; require <=0.06m <0.1m/s for 1s",
-        xy_error, valid ? velocity.head<2>().norm() : 0.0, valid);
+        "[ExternalLanding] high alignment waiting: xy=%.4f speed=%.4f valid=%d; require <=0.06m <0.1m/s for 1s; H_max_age=%.3fs",
+        xy_error, valid ? velocity.head<2>().norm() : 0.0, valid,
+        external_landing_mark_max_age_sec_);
     return ready;
 }
 
@@ -4381,6 +4388,7 @@ bool LLController::landingMotionSettled(bool handoff, double xy_error) {
     sample.z_error_m=sample.height_m-(handoff ? land_height : external_landing_capture_height_);
     sample.controlled_descent=handoff;
     sample.check_vertical_speed=!handoff;
+    sample.check_horizontal_motion=!handoff;
     sample.horizontal_speed_mps=sample.feedback_valid ? v.head<2>().norm() : 0.0;
     sample.vertical_speed_mps=sample.feedback_valid ? v.z() : 0.0;
     sample.alignment_latched=handoff ? external_landing_alignment_complete_ : true;
@@ -4479,6 +4487,10 @@ void LLController::beginDropRecoveryWithoutAck() {
         c.semantic_target_id != invoked.semantic_target_id ||
         c.semantic_target_first_seen != invoked.semantic_target_first_seen ||
         c.semantic_target_class != invoked.semantic_target_class || c.align_mode != invoked.align_mode) return;
+    // Wall-clock timing starts in the worker immediately before the RPC.
+    // A fast ACK must not bypass the configured hold time.
+    if (servoWorkerForSlot(servo_action_slot_).invocationElapsedSec(
+            servo_action_id_, servo_action_slot_) < drop_recovery_delay_sec_) return;
     drop_recovery_started_ = true;
     // Consume the attempt for flight sequencing, without synthesizing a Servo ACK.
     drop_complete = true;
@@ -4486,7 +4498,7 @@ void LLController::beginDropRecoveryWithoutAck() {
         drop_completed[detect_point_counter] = true;
     drop_descent_profile_.pause(ros::Time::now().toSec());
     publishDropInvocation();
-    ROS_INFO("[DropSystem] invocation action=%llu slot=%d: recovering immediately, ACK not required",
+    ROS_INFO("[DropSystem] invocation action=%llu slot=%d: recovering after configured delay, ACK not required",
         static_cast<unsigned long long>(servo_action_id_), servo_action_slot_);
 }
 
@@ -4565,9 +4577,11 @@ DropActionResult LLController::executeDropAction(int servo_id) {
 }
 
 void LLController::pollDropAction() {
-    if (!servo_action_pending_) return;
-    if (servoWorkerForSlot(servo_action_slot_).invocationStarted(servo_action_id_, servo_action_slot_))
+    // Continue the recovery timer even when a fast RPC has already completed.
+    if (servo_action_attempted_ &&
+        servoWorkerForSlot(servo_action_slot_).invocationStarted(servo_action_id_, servo_action_slot_))
         beginDropRecoveryWithoutAck();
+    if (!servo_action_pending_) return;
     AsyncServo::Completion completion;
     if (!servoWorkerForSlot(servo_action_slot_).poll(servo_action_id_, servo_action_slot_, &completion)) return;
     servo_action_pending_ = false;
@@ -4585,6 +4599,14 @@ void LLController::pollDropAction() {
         ROS_WARN("[DropSystem] fenced NOT_STARTED action=%llu slot=%d unlocked=%s; await new ALIGN",
                  static_cast<unsigned long long>(completion.action), completion.slot,
                  unlocked ? "true" : "false");
+        return;
+    }
+    if (external_mission_mode_ && drop_recover_without_ack_) {
+        // Record the real outcome; only the invocation timer advances flight.
+        servo_complete.data = false;
+        ROS_INFO("[DropSystem] Servo action=%llu slot=%d result=%d recorded; recovery uses invocation delay",
+            static_cast<unsigned long long>(completion.action), completion.slot,
+            static_cast<int>(completion.result));
         return;
     }
     servo_complete.data = dropActionSucceeded(completion.result);

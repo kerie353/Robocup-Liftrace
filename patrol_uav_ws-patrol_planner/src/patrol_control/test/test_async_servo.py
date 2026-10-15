@@ -197,6 +197,7 @@ public:
     AsyncServo async_servo_;
     std::array<AsyncServo,3> no_ack_servo_workers_;
     bool drop_recover_without_ack_=false, drop_recovery_started_=false;
+    double drop_recovery_delay_sec_=0.0; // legacy fixtures test the zero-delay policy
     uav_vision::AlignmentTargetContext servo_invocation_context_;
     int invocation_events=0;
     void publishDropInvocation(){++invocation_events;}
@@ -246,7 +247,25 @@ void resetContext(LLController& c) {
 int main(int argc, char** argv) {
     assert(argc==2); const std::string name=argv[1];
     auto t=std::make_shared<Transport>(); LLController c; c.servo_client.impl=t; c.servo_action_client_.impl=t;
-    if (name=="no_ack_recovery") {
+    if (name=="delay_fast_ack" || name=="delay_failure" || name=="delay_hung") {
+        c.drop_recover_without_ack_=true;c.drop_recovery_delay_sec_=0.5;
+        t->delay_ms=0;t->success=(name!="delay_failure");t->gated=(name=="delay_hung");
+        assert(c.executeDropAction(1)==DropActionResult::kPending);
+        waitStarted(t);c.pollDropAction();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));c.pollDropAction();
+        assert(!c.drop_recovery_started_&&!c.drop_complete&&!c.servo_complete.data);
+        assert(c.invocation_events==0);
+        if(!t->gated)assert(!c.servo_action_pending_);
+        const auto until=Clock::now()+std::chrono::seconds(2);
+        while(!c.drop_recovery_started_&&Clock::now()<until){
+            c.pollDropAction();std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        assert(c.drop_recovery_started_&&c.drop_complete&&!c.servo_complete.data);
+        assert(c.servoWorkerForSlot(1).invocationElapsedSec(c.servo_action_id_,1)>=0.5);
+        assert(c.invocation_events==1&&t->calls==1);
+        c.pollDropAction();assert(c.invocation_events==1);
+        if(t->gated)release(t);finish(c);
+    } else if (name=="no_ack_recovery") {
         c.drop_recover_without_ack_=true;t->gated=true;
         assert(c.executeDropAction(1)==DropActionResult::kPending);
         waitStarted(t);c.pollDropAction();
@@ -476,6 +495,9 @@ int main(int argc, char** argv) {
 
 
 class AsyncServoTest(unittest.TestCase):
+    def test_delay_even_when_ack_returns_early(self): self.run_case("delay_fast_ack")
+    def test_delay_failure_still_recovers(self): self.run_case("delay_failure")
+    def test_delay_hung_call_does_not_wait_ack(self): self.run_case("delay_hung")
     def test_no_ack_recovers_once_and_old_hung_rpc_cannot_block_next_slot(self): self.run_case("no_ack_recovery")
     def test_no_ack_failure_still_keeps_recovery_without_synthesizing_ack(self): self.run_case("no_ack_failure")
     def test_no_ack_preserves_geometry_and_permission_before_invocation(self): self.run_case("no_ack_guards")

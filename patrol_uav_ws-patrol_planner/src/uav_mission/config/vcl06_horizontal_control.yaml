@@ -70,7 +70,8 @@ motion_feedback:
   odom_topic: /mavros/local_position/odom
   twist_frame: child
 drop_system:
-  recover_without_ack: true  # 客户端调用发出后立即恢复，按调用消耗槽位，不等硬件ACK
+  recover_without_ack: true  # 配置1：调用后等待0.5s恢复；false为配置2：成功ACK后恢复
+  recovery_delay_sec: 0.5  # 仅配置1生效，从客户端调用开始计时，不等待ACK
   # 从成功进入下降起计时；满20秒不再等待XY/高度，走同身份异步投递许可。
   # 取消、有效反馈、飞行状态、边界与防重复仍保留；不影响H降落。
   release_timeout:

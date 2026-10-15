@@ -48,7 +48,7 @@ search_line_x:
 - 5.4
 compressed_image_topic: /camera/image_raw/compressed
 high_agl: 2.0
-max_agl: 2.3
+max_agl: 3.2
 auto_start_after_arm: true
 initialization_timeout: 300.0
 obstacle_columns_enabled: true

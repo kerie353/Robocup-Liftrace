@@ -1,0 +1,18 @@
+test_active_mission_and_unfinished_transactions_reject_rebuild (__main__.ObservationAdmissionTest.test_active_mission_and_unfinished_transactions_reject_rebuild) ... ok
+test_delayed_previous_generation_is_ignored (__main__.ObservationAdmissionTest.test_delayed_previous_generation_is_ignored) ... ok
+test_empty_current_map_requires_fresh_observation_certificate (__main__.ObservationAdmissionTest.test_empty_current_map_requires_fresh_observation_certificate) ... ok
+test_fresh_header (__main__.ObservationAdmissionTest.test_fresh_header) ... ok
+test_fresh_ready_does_not_make_an_old_cloud_fresh (__main__.ObservationAdmissionTest.test_fresh_ready_does_not_make_an_old_cloud_fresh) ... ok
+test_idle_admission_latches_start_inhibition (__main__.ObservationAdmissionTest.test_idle_admission_latches_start_inhibition) ... ok
+test_invalidated_ready_rejects_start (__main__.ObservationAdmissionTest.test_invalidated_ready_rejects_start) ... ok
+test_legacy_map_contract_is_retained_when_disabled (__main__.ObservationAdmissionTest.test_legacy_map_contract_is_retained_when_disabled) ... ok
+test_new_ready_and_old_map_cannot_mix_epochs (__main__.ObservationAdmissionTest.test_new_ready_and_old_map_cannot_mix_epochs) ... ok
+test_old_or_zero_ready_cannot_release_inhibition (__main__.ObservationAdmissionTest.test_old_or_zero_ready_cannot_release_inhibition) ... ok
+test_only_fresh_new_generation_after_reset_releases_inhibition (__main__.ObservationAdmissionTest.test_only_fresh_new_generation_after_reset_releases_inhibition) ... ok
+test_repeated_prepare_does_not_move_generation_fence (__main__.ObservationAdmissionTest.test_repeated_prepare_does_not_move_generation_fence) ... ok
+test_ros_cloud_sequence_rewrite_does_not_break_certificate (__main__.ObservationAdmissionTest.test_ros_cloud_sequence_rewrite_does_not_break_certificate) ... ok
+
+----------------------------------------------------------------------
+Ran 13 tests in 0.108s
+
+OK

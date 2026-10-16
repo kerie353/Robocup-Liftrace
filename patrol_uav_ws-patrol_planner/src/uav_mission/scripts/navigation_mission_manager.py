@@ -28,6 +28,7 @@ from uav_mission.profile_policy import load_profile
 from uav_mission.search_policy import SearchPolicy
 from uav_mission.execution_speed import FollowingSpeed
 from uav_mission.motion_optimization import MotionOptimization
+from uav_mission.observation_admission import ready_header, rebuild_allowed, rebuild_completed
 from uav_mission.motion_observations import FreshPoseWindow
 from uav_mission.corridor_speed import CorridorSpeed, CorridorSpeedConfig
 
@@ -79,6 +80,7 @@ TRANSIENT_READINESS_FAILURES = frozenset((
     "map_missing",
     "map_stale",
     "map_stamp_in_future",
+    "observation_snapshot_stamp_mismatch",
 ))
 
 
@@ -127,6 +129,11 @@ class NavigationMissionManager:
             rospy.get_param(
                 "~readiness/stamp_future_tolerance", 0.05))
         self._require_map = rospy.get_param("~readiness/require_map", True)
+        self._observation_required = rospy.get_param('/navigation_observation/enabled', False)
+        self._observation_header = None
+        self._map_rebuild_pending = False
+        self._map_rebuild_after = 0.
+        self._map_rebuild_generation = 0
         self._tick_hz = float(rospy.get_param("~runtime/tick_hz", 10.0))
         self._mission_id_prefix = str(
             rospy.get_param("~runtime/mission_id_prefix", "vcl06"))
@@ -146,7 +153,14 @@ class NavigationMissionManager:
         self._pose_sub = rospy.Subscriber(
             "pose", PoseStamped, self._on_pose, queue_size=1)
         self._map_sub = rospy.Subscriber(
-            "map", PointCloud2, self._on_map, queue_size=1)
+            '/navigation/observed_obstacles' if self._observation_required else 'map',
+            PointCloud2, self._on_map, queue_size=1)
+        if self._observation_required:
+            from std_msgs.msg import Header
+            self._observation_sub = rospy.Subscriber(
+                '/navigation/observation_ready', Header, self._on_observation, queue_size=1)
+        self._prepare_rebuild_service = rospy.Service(
+            'prepare_map_rebuild', Trigger, self._on_prepare_map_rebuild)
         self._result_sub = rospy.Subscriber(
             "mission_result", NavigationResult,
             self._on_result, queue_size=20)
@@ -308,16 +322,28 @@ class NavigationMissionManager:
         # datum.  A small negative z during touchdown is therefore valid.
         if position.z > 4.0:
             return False, "pose_altitude_out_of_bounds"
+        if getattr(self, '_observation_required', False):
+            if self._map_rebuild_pending:
+                return False, 'map_rebuild_pending'
+            header = self._observation_header
+            if header is None or not ready_header(
+                    header.stamp.to_sec(), now, header.frame_id, config.mission_frame):
+                return False, 'observation_map_not_ready'
         if not self._require_map:
             return True, "ready"
         if self._map is None:
             return False, "map_missing"
         if self._map.header.frame_id != config.mission_frame:
             return False, "map_frame_mismatch"
+        # ROS1 may overwrite a PointCloud2 Header.seq during publication.
+        # Pair the actual cloud with its source-time certificate instead.
+        if (getattr(self, '_observation_required', False) and
+                self._map.header.stamp.to_sec() != self._observation_header.stamp.to_sec()):
+            return False, 'observation_snapshot_stamp_mismatch'
         map_age_state = self._age_state(
             self._map.header.stamp,
             now,
-            self._map_max_age,
+            min(self._map_max_age, .35) if getattr(self, '_observation_required', False) else self._map_max_age,
             self._stamp_future_tolerance,
         )
         if map_age_state == "future":
@@ -328,7 +354,8 @@ class NavigationMissionManager:
         height = int(self._map.height)
         point_step = int(self._map.point_step)
         row_step = int(self._map.row_step)
-        if width <= 0 or height <= 0:
+        if (width < 0 or height <= 0 or
+                (width == 0 and not getattr(self, '_observation_required', False))):
             return False, "map_empty"
         if point_step <= 0 or row_step < width * point_step:
             return False, "map_layout_invalid"
@@ -339,6 +366,35 @@ class NavigationMissionManager:
     def _current_xy(self):
         position = self._pose.pose.position
         return float(position.x), float(position.y)
+
+    def _on_observation(self, message):
+        with self._lock:
+            previous = self._observation_header
+            if previous is not None and message.seq < previous.seq:
+                return
+            self._observation_header = message
+            if self._map_rebuild_pending:
+                frame = self._mission_config().mission_frame
+                if rebuild_completed(message.stamp.to_sec(), rospy.Time.now().to_sec(),
+                                     message.frame_id, frame, message.seq,
+                                     self._map_rebuild_generation, self._map_rebuild_after):
+                    rospy.set_param('/navigation_observation/rebuilding', False)
+                    self._map_rebuild_pending = False
+
+    def _on_prepare_map_rebuild(self, _request):
+        with self._lock:
+            if not getattr(self, '_observation_required', False):
+                return TriggerResponse(success=False, message='observation_map_disabled')
+            core = self._runtime.core if self._runtime is not None else None
+            phase = _phase_name(core.phase) if core is not None else 'IDLE'
+            if not rebuild_allowed(phase, core is not None and core.active_action is not None):
+                return TriggerResponse(success=False, message='mission_or_transaction_active')
+            if not self._map_rebuild_pending:
+                self._map_rebuild_pending = True
+                self._map_rebuild_after = rospy.Time.now().to_sec()
+                self._map_rebuild_generation = (self._observation_header.seq
+                                                if self._observation_header is not None else 0)
+            return TriggerResponse(success=True, message='start inhibited until new map READY')
 
     def _on_pose(self, message):
         with self._lock:

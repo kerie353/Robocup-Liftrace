@@ -1,0 +1,3 @@
+Python AST: 9 files; XML parse: 9 files; C++ lexical balance: 14 files
+Static contracts: TF/body, opt-in defaults, entry wiring, build registration, candidate evidence separation, exact-time TF, reset guards/order/generation: PASS
+NOT performed: C++ compilation, C++ test execution, ROS launch expansion, simulation, board execution or performance measurements

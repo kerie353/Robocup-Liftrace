@@ -4,6 +4,7 @@
   <arg name="landing_touchdown_setpoint_topic" default="/navigation/landing_setpoint_touchdown" />
   <arg name="mapping_profile" default="low" />
   <arg name="start_mapping" default="false" />
+  <arg name="observation_enabled" default="false" />
   <arg name="alignment_mode" default="legacy_static" />
   <arg name="map_frame" default="camera_init" />
   <arg name="body_to_imu_xyz" default="0 0 0.05" />
@@ -22,6 +23,7 @@
   <!-- Hardware supervisor starts mapping only after measured FC/LIO agreement.
        The existing SITL entry explicitly opts into its simultaneous startup. -->
   <include if="$(arg start_mapping)" file="$(find uav_board_trials)/launch/mapping.launch">
+    <arg name="observation_enabled" value="$(arg observation_enabled)" />
     <arg name="mapping_profile" value="$(arg mapping_profile)" />
     <arg name="map_frame" value="$(arg map_frame)" />
   </include>

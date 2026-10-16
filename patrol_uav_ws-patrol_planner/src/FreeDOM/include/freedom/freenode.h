@@ -4,11 +4,15 @@
 #include <ros/ros.h>
 #include <ros/callback_queue.h>
 #include <thread>
+#include <atomic>
 #include <sensor_msgs/PointCloud2.h>
 #include <tf2_ros/transform_listener.h>
 #include <pcl/point_cloud.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <geometry_msgs/TransformStamped.h>
+#include <mavros_msgs/State.h>
+#include <mavros_msgs/ExtendedState.h>
+#include <std_srvs/Trigger.h>
 
 #include "freedom/freedom.h"
 #include "freedom/visualization.h"
@@ -21,7 +25,17 @@ public:
     ~FreeNode();
 
 private:
-    FreeDOM static_map;
+    std::unique_ptr<FreeDOM> static_map;
+    FreeDOM::Config map_config{};
+    void create_map();
+    bool reset_map(std_srvs::Trigger::Request&,std_srvs::Trigger::Response&);
+    ros::ServiceServer reset_service;
+    ros::Subscriber state_sub,landed_sub;
+    mavros_msgs::State state;
+    mavros_msgs::ExtendedState landed;
+    ros::Time state_received,landed_received,minimum_cloud_stamp;
+    double cloud_max_age=.35;
+    std::atomic<bool> stopping{false};
 
     std::string map_tf_frame;
     std::string sensor_tf_frame;

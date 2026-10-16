@@ -258,6 +258,7 @@ void SDFMap::initMap(ros::NodeHandle& nh) {
   rand_noise2_ = normal_distribution<double>(0, 0.2);
   random_device rd;
   eng_ = default_random_engine(rd());
+  initObservation();
 }
 
 void SDFMap::resetBuffer() {
@@ -287,6 +288,8 @@ void SDFMap::resetBuffer(Eigen::Vector3d min_pos, Eigen::Vector3d max_pos) {
         md_.occupancy_buffer_inflate_[toAddress(x, y, z)] = 0;
         if (recovery_layers_enabled_) md_.recovery_sources_[toAddress(x,y,z)] = 0;
         md_.distance_buffer_[toAddress(x, y, z)] = 10000;
+        md_.distance_buffer_neg_[toAddress(x,y,z)]=0.;
+        md_.distance_buffer_all_[toAddress(x,y,z)]=10000.;
       }
 }
 
@@ -858,6 +861,7 @@ void SDFMap::visCallback(const ros::TimerEvent& /*event*/) {
 }
 
 void SDFMap::updateOccupancyCallback(const ros::TimerEvent& /*event*/) {
+  if(observation_enabled_) return; // one authoritative raw-cloud fusion path
   if (!md_.occ_need_update_) return;
 
   /* update occupancy */
@@ -933,7 +937,17 @@ void SDFMap::depthPoseCallback(const sensor_msgs::ImageConstPtr& img,
 }
 
 void SDFMap::odomCallback(const nav_msgs::OdometryConstPtr& odom) {
-  if (md_.has_first_depth_) return;
+  if(observation_enabled_) {
+    const double age=(ros::Time::now()-odom->header.stamp).toSec();
+    const auto& p=odom->pose.pose.position;
+    if(odom->header.frame_id!=mp_.frame_id_ || odom->header.stamp.isZero() ||
+       age<0. || age>observation_worker_->maxAge() ||
+       !std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) {
+      md_.has_odom_=false; return;
+    }
+    observation_odom_stamp_=odom->header.stamp;
+  }
+  if (md_.has_first_depth_ && !observation_enabled_) return;
 
   md_.camera_pos_(0) = odom->pose.pose.position.x;
   md_.camera_pos_(1) = odom->pose.pose.position.y;
@@ -943,6 +957,10 @@ void SDFMap::odomCallback(const nav_msgs::OdometryConstPtr& odom) {
 }
 
 void SDFMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr& img) {
+  if (observation_enabled_ && !applying_observation_) {
+    observation_worker_->candidates(img);
+    return;
+  }
   recovery_layers_valid_ = false;
   node_.getParamCached("sdf_map/search_region/enabled", mp_.search_region_enabled_);
   // Apply phase ceiling before rebuilding the local occupancy map. The
@@ -963,8 +981,6 @@ void SDFMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr& img) {
     return;
   }
 
-  if (latest_cloud.points.size() == 0) return;
-
   if (isnan(md_.camera_pos_(0)) || isnan(md_.camera_pos_(1)) || isnan(md_.camera_pos_(2))) return;
 
   Eigen::Vector3d rebuild_min = md_.camera_pos_ - mp_.local_update_range_;
@@ -977,6 +993,22 @@ void SDFMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr& img) {
     rebuild_max.z() = mp_.map_max_boundary_.z();
   }
   this->resetBuffer(rebuild_min, rebuild_max);
+  if(observation_enabled_) {
+    // Coverage never admits a body outside the patch actually rebuilt below.
+    const Eigen::Vector3d margin(mp_.obstacles_inflation_+mp_.resolution_,
+        mp_.obstacles_inflation_+mp_.resolution_,0.);
+    observation_min_=rebuild_min.cwiseMax(mp_.map_min_boundary_)+margin;
+    observation_max_=rebuild_max.cwiseMin(mp_.map_max_boundary_)-margin;
+  }
+  if (latest_cloud.empty()) {
+    // Empty is a new snapshot, not permission to retain the previous obstacle
+    // map. Observation coverage still distinguishes unknown from free.
+    posToIndex(rebuild_min,md_.local_bound_min_);
+    posToIndex(rebuild_max,md_.local_bound_max_);
+    boundIndex(md_.local_bound_min_); boundIndex(md_.local_bound_max_);
+    applyFlightCeiling(); md_.esdf_need_update_=true;
+    return;
+  }
 
   pcl::PointXYZ pt;
   Eigen::Vector3d p3d, p3d_inf;
@@ -1000,6 +1032,7 @@ void SDFMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr& img) {
 
   const auto horizontal_candidate = [&](const pcl::PointXYZ& point) {
     return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z) &&
+        observationColumn(point) &&
         point.z >= mp_.horizontal_obstacle_min_z_ &&
         point.x >= mp_.horizontal_min_x_ && point.x <= mp_.horizontal_max_x_ &&
         point.y >= mp_.horizontal_min_y_ && point.y <= mp_.horizontal_max_y_;
@@ -1142,6 +1175,11 @@ void SDFMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr& img) {
   boundIndex(md_.local_bound_min_);
   boundIndex(md_.local_bound_max_);
 
+  if (observation_enabled_) {
+    posToIndex(rebuild_min,md_.local_bound_min_);
+    posToIndex(rebuild_max,md_.local_bound_max_);
+    boundIndex(md_.local_bound_min_); boundIndex(md_.local_bound_max_);
+  }
   if (mp_.horizontal_avoidance_) {
     const int low = std::max(0, int(floor((mp_.horizontal_floor_z_ - mp_.map_origin_(2)) *
                                          mp_.resolution_inv_)));

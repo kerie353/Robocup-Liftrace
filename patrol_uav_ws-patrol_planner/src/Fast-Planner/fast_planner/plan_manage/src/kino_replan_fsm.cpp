@@ -103,14 +103,17 @@ void KinoReplanFSM::init(ros::NodeHandle& nh) {
   std::string mode_topic, map_topic, progress_topic;
   nh.param<std::string>("fsm/controller_mode_topic", mode_topic, "/detect/point_class");
   nh.param<std::string>("fsm/map_freshness_topic", map_topic, "/freedom/static_pointcloud");
+  bool observation_enabled=false;
+  nh.param("/navigation_observation/enabled",observation_enabled,false);
+  if(observation_enabled) map_topic="/navigation/observed_obstacles";
   nh.param<std::string>("progress/topic", progress_topic, "/planning/progress");
   controller_sub_ = nh.subscribe<std_msgs::Int8>(mode_topic, 1,
       [this](const std_msgs::Int8::ConstPtr& msg) {
         controller_mode_ = msg->data; controller_stamp_ = ros::Time::now();
       });
   map_age_sub_ = nh.subscribe<sensor_msgs::PointCloud2>(map_topic, 1,
-      [this](const sensor_msgs::PointCloud2::ConstPtr& msg) {
-        if (msg->width && msg->height && !msg->header.stamp.isZero()) map_stamp_ = msg->header.stamp;
+      [this,observation_enabled](const sensor_msgs::PointCloud2::ConstPtr& msg) {
+        if (msg->height && (msg->width || observation_enabled) && !msg->header.stamp.isZero()) map_stamp_ = msg->header.stamp;
       });
   if (progress_enabled_) progress_pub_ = nh.advertise<plan_manage::TrajectoryProgress>(progress_topic, 20);
   if (server_hold_replan_enabled_)
@@ -261,6 +264,23 @@ void KinoReplanFSM::execFSMCallback(const ros::TimerEvent& e) {
   }
 
   const ros::Time now = ros::Time::now();
+  auto observation_map=planner_manager_->edt_environment_->sdf_map_;
+  if(observation_map->observationEnabled()) {
+    const auto generation=observation_map->observationGeneration();
+    const bool changed=observation_generation_seen_!=0 && generation!=observation_generation_seen_;
+    observation_generation_seen_=generation;
+    if(changed || !observation_map->observationFresh()) {
+      if(have_target_ || goal_has_trajectory_ || recovery_active_) {
+        replan_pub_.publish(std_msgs::Empty());
+        if(recovery_active_) publishRecovery(false,odom_pos_,Eigen::Vector3d::Zero());
+        if(goal_status_tracker_.active()) publishGoalStatus(goal_status_tracker_.record(
+            plan_manage::PlannerStatus::CANCELLED,"observation_map_invalidated",now,currentGoalDistance()));
+        recovery_active_=false; have_target_=false; goal_has_trajectory_=false;
+        changeFSMExecState(WAIT_TARGET,"OBSERVATION");
+      }
+      return;
+    }
+  }
   const auto height = referenceHeight();
   if (recovery_active_) { recoveryTick();return; }
   static ros::Time height_request_polled;

@@ -66,6 +66,16 @@ def run_session(a,settings,rig,startup,generate,launch_package,launch_prefix='',
         (out/'run_metadata.json').write_text(encoded)
         metadata_pub.publish(String(data=encoded))
     children=[];files=[];bag=None;mapping_recording=None
+    observation_header=[None]
+    if settings.get('observation_map_enabled',False):
+        from std_msgs.msg import Header
+        observation_sub=rospy.Subscriber('/navigation/observation_ready',Header,
+            lambda msg:observation_header.__setitem__(0,msg),queue_size=1)
+    def observation_ready():
+        if not settings.get('observation_map_enabled',False):return True
+        from .observation_admission import ready_header
+        msg=observation_header[0]
+        return msg is not None and ready_header(msg.stamp.to_sec(),rospy.Time.now().to_sec(),msg.frame_id,startup['frame'])
     env=os.environ.copy();env['ROS_LOG_DIR']=str(out/'roslog')
     def launch(name,args):
         stream=(out/(name+'.log')).open('w');files.append(stream)
@@ -111,7 +121,8 @@ def run_session(a,settings,rig,startup,generate,launch_package,launch_prefix='',
                 warmup.observe(msg.header.stamp.to_sec(),rospy.Time.now().to_sec(),
                     msg.header.frame_id==startup['frame'] and msg.width*msg.height>0 and bool(msg.data))
         cloud_sub=rospy.Subscriber(startup['cloud_topic'],PointCloud2,cloud,queue_size=1)
-        mapper=launch('mapping',['mapping_profile:='+settings.get('mapping_profile','high'),'map_frame:='+startup['frame']])
+        mapper=launch('mapping',['mapping_profile:='+settings.get('mapping_profile','high'),'map_frame:='+startup['frame'],
+            'observation_enabled:='+str(settings.get('observation_map_enabled',False)).lower()])
         def check_mapping_alignment(allow_pending=False):
             with lock:
                 s=state[0]
@@ -165,7 +176,7 @@ def run_session(a,settings,rig,startup,generate,launch_package,launch_prefix='',
             aligned=check_mapping_alignment(allow_pending=True)
             if (aligned and not vision_ready.missing(rospy.Time.now().to_sec())
                     and (a.mode=='preview' or time.monotonic()-control_rx[0]<.5)
-                    and warmup.ready(rospy.Time.now().to_sec())):break
+                    and warmup.ready(rospy.Time.now().to_sec()) and observation_ready()):break
             time.sleep(.1)
         # Keep readiness subscriptions alive: unregister may block long enough
         # to make the already-live control timestamp stale before its check.
@@ -174,6 +185,7 @@ def run_session(a,settings,rig,startup,generate,launch_package,launch_prefix='',
         if a.mode=='flight' and time.monotonic()-control_rx[0]>=.5:raise RuntimeError('Controller setpoints did not become live; inspect patrol_control startup errors')
         check_mapping_alignment()
         if not warmup.ready(rospy.Time.now().to_sec()):raise RuntimeError('FreeDOM map stale before READY')
+        if not observation_ready():raise RuntimeError('Observed map coverage/stamp not READY')
         print('READY:',out,flush=True)
         if a.mode=='flight' and settings.get('auto_start_after_arm',False):print('AUTO_SEQUENCE: operator arms AND selects OFFBOARD -> stable takeoff hover -> mission. No automatic arming or mode request.',flush=True)
         print('Ground/reference and all local-Z limits generated automatically. No arming or mission start was sent.',flush=True)

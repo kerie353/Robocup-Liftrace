@@ -1,5 +1,7 @@
 # FreeDOM 自动建图记录：板端使用说明
 
+2026-10-16 本地动态地图候选额外记录 `/navigation/observed_obstacles`、`/navigation/observation_ready`、`/navigation/observation_diagnostics` 及有效观测参数。原 FreeDOM 点云继续记录；WorkBench 分支的既有 PCD 导出未修改，不能将该导出当作观测层的当前占据。[接口与验证边界](DYNAMIC_OBSTACLE_MAPPING.md)。
+
 2026-10-15 源码交付。目标设备为 Orange Pi 5 Plus（RK3588），运行环境为现有 ROS1 Noetic 系统 Python。未在板端部署或运行验收，本轮不执行编译。
 
 ## 配套版本

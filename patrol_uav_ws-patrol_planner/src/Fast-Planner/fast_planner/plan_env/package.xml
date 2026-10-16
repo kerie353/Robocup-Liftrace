@@ -50,6 +50,9 @@
   <!--   <doc_depend>doxygen</doc_depend> -->
   <buildtool_depend>catkin</buildtool_depend>
   <depend>cv_bridge</depend>
+  <depend>tf2_ros</depend>
+  <depend>mavros_msgs</depend>
+  <depend>std_srvs</depend>
   <build_depend>roscpp</build_depend>
   <build_depend>rospy</build_depend>
   <build_depend>std_msgs</build_depend>

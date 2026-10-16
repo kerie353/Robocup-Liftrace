@@ -105,7 +105,7 @@
        component must not silently define a second camera_init frame. -->
   <node pkg="tf2_ros" type="static_transform_publisher" name="mapping_imu_extrinsic"
         args="$(arg body_to_imu_xyz) 0 0 0 1 vision_body mapping_imu" />
-  <param name="/freedom/sensor_tf_frame" value="mapping_imu" />
+  <param name="/freedom/sensor_tf_frame" value="body" />
   <rosparam ns="/freedom" file="$(find uav_mission)/config/competition_freedom.yaml" />
   <rosparam param="/simulation/px4_parameters">
     # Initial hover input derived from this generic model mass and motor mapping.

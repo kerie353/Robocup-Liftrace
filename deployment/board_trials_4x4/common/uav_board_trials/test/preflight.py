@@ -100,7 +100,7 @@ for folder in TRIAL_FOLDERS.values():
             mapping=roslaunch.config.load_config_default([(str(P/'launch/mapping.launch'),['mapping_profile:='+mapping_profile(s)])],11311,verbose=False)
             params.update({k:v.value for k,v in mapping.params.items()})
             assert [n.name for n in mapping.nodes]==['freedom']
-            assert params['/freedom/sensor_tf_frame']=='mapping_imu'
+            assert params['/freedom/sensor_tf_frame']=='body'
             assert params['/freedom/map_tf_frame']=='camera_init'
             assert params['/freedom/map/voxel_depth']==2
             assert params['/freedom/map/sub_voxel_size']==.1

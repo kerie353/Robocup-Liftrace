@@ -31,7 +31,9 @@ public:
     void visualize_scan_removal_result(const ScanMap& scan);
     void visualize_raycast_enhancement_result(const DepthImage& image);
     void visualize_map_removal_result(const MRMap& map);
+    void set_source_stamp(const ros::Time& stamp) { source_stamp_=stamp; }
 private:
+    ros::Time source_stamp_;
     std::string map_tf_frame;
     double sub_voxel_size;
     double voxel_size;

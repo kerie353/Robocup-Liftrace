@@ -1,0 +1,23 @@
+# Local candidate: enable through mapping.launch observation_enabled:=true only
+# after the separately documented build/replay/board-ground validation.
+# All ranges are metres, all durations seconds. No learned person detector.
+fast_planner_node:
+  sdf_map:
+    observation:
+      raw_topic: /cloud_registered_body
+      sensor_frame: body
+      range: 6.0
+      update_hz: 10.0
+      clear_hz: 5.0
+      max_rays: 1500
+      max_age: 0.35
+      hit_lease: 1.0
+      free_lease: 2.0
+      clear_observations: 3
+      stable_seconds: 2.0
+      stable_gap: 0.30
+      endpoint_guard: 0.20
+      body_xy: 0.275
+      body_up: 0.20
+      body_down: 0.20
+      warmup_seconds: 2.0

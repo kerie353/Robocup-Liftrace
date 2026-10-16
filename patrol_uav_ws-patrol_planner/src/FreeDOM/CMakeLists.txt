@@ -26,11 +26,13 @@ find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
   sensor_msgs
   rosbag
+  mavros_msgs
+  std_srvs
 )
 
 catkin_package(
  INCLUDE_DIRS include
- CATKIN_DEPENDS roscpp std_msgs rosbag
+ CATKIN_DEPENDS roscpp std_msgs rosbag mavros_msgs std_srvs
 )
 
 include_directories( 
@@ -63,6 +65,9 @@ target_link_libraries( freedom_node
     ${OpenCV_LIBS}
     ${cv_bridge_LIBRARIES}
 )
+if(catkin_EXPORTED_TARGETS)
+  add_dependencies(freedom_node ${catkin_EXPORTED_TARGETS})
+endif()
 
 add_executable( static_pointcloud_viz_node
   src/static_pointcloud_viz_node.cpp

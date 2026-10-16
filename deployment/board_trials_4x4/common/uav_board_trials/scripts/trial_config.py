@@ -206,6 +206,7 @@ def validate_settings(settings):
     if settings['high_agl']>max_agl:raise ValueError('high altitude exceeds cap')
     if 'terminal_hover_agl' in settings and not .25<=settings['terminal_hover_agl']<=.5:raise ValueError('invalid terminal hover')
     if type(settings.get('obstacle_columns_enabled',True)) is not bool:raise ValueError('invalid obstacle column flag')
+    if type(settings.get('observation_map_enabled',False)) is not bool:raise ValueError('observation_map_enabled must be boolean')
     from trial_motion import motion_options
     motion_options(settings)
     area=flight_geometry(settings);cb=area['center_bounds']

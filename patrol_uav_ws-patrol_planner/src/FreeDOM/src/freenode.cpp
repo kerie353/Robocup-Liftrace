@@ -7,27 +7,16 @@ FreeNode::FreeNode()
     ros::NodeHandle nh_private("~");        // 局部nh,用于获取param和发布话题
 
     // 获取ros参数与FreeDOM参数以及visualizer的参数
-    FreeDOM::Config map_config;
     Visualizer::Config vis_config;
     get_params(nh_private,map_config,vis_config);
 
     // 设置FreeDOM与visualizer的config
-    static_map.set_params(map_config);
     if(enable_visualization) visualizer.set_params(vis_config,nh_private);
-
-    // 设置可视化回调
-    if(enable_visualization)
-    {
-        static_map.set_scan_removal_callback([&](const ScanMap& scan){
-            visualizer.visualize_scan_removal_result(scan);});
-        
-        if(enable_raycast_enhancement)
-            static_map.set_raycast_enhancement_callback([&](const DepthImage& image){
-                visualizer.visualize_raycast_enhancement_result(image);});
-
-        static_map.set_map_removal_callback([&](const MRMap& map){
-            visualizer.visualize_map_removal_result(map);});
-    }
+    create_map();
+    nh_private.param("cloud_max_age",cloud_max_age,.35);
+    if(!std::isfinite(cloud_max_age) || cloud_max_age<=0. || cloud_max_age>2.)
+        throw std::invalid_argument("invalid FreeDOM cloud_max_age");
+    minimum_cloud_stamp=ros::Time::now();
 
     // 为建图线程设置独立回调队列
     nh.setCallbackQueue(&callback_queue);
@@ -37,6 +26,12 @@ FreeNode::FreeNode()
     tf_listener.reset(new tf2_ros::TransformListener(*tf_buffer));
     pointcloud_sub = nh.subscribe(pointcloud_topic, 1, &FreeNode::pointcloud_callback, this);
     save_map_sub = nh.subscribe(save_map_topic, 10, &FreeNode::save_map_callback, this);
+    state_sub=nh.subscribe<mavros_msgs::State>("/mavros/state",1,
+        [this](const mavros_msgs::State::ConstPtr& msg){state=*msg; state_received=ros::Time::now();});
+    landed_sub=nh.subscribe<mavros_msgs::ExtendedState>("/mavros/extended_state",1,
+        [this](const mavros_msgs::ExtendedState::ConstPtr& msg){landed=*msg; landed_received=ros::Time::now();});
+    // This service shares the mapping queue: no reset can race integration.
+    reset_service=nh.advertiseService("/freedom/reset_map",&FreeNode::reset_map,this);
 
     // 启动建图线程
     thread = std::thread(&FreeNode::mapping_thread, this);
@@ -44,6 +39,7 @@ FreeNode::FreeNode()
 
 FreeNode::~FreeNode()
 {
+    stopping=true;
     if (thread.joinable())
         thread.join();
 }
@@ -155,12 +151,18 @@ void FreeNode::get_params(ros::NodeHandle &nh_private, FreeDOM::Config& map_conf
 void FreeNode::mapping_thread()
 {
     // 独立单线程建图
-    while (ros::ok())
+    while (ros::ok() && !stopping)
         callback_queue.callAvailable(ros::WallDuration(0.001));
 }
 
 void FreeNode::pointcloud_callback(const sensor_msgs::PointCloud2ConstPtr& pointcloud)
 {
+    const double age=(ros::Time::now()-pointcloud->header.stamp).toSec();
+    if(pointcloud->header.frame_id!=sensor_tf_frame || pointcloud->header.stamp<=minimum_cloud_stamp ||
+       age<0. || age>cloud_max_age) {
+        ROS_WARN_STREAM_THROTTLE(2.,"FreeDOM rejected mismatched/stale/pre-reset cloud");
+        return;
+    }
     pcl::PointCloud<pcl::PointXYZ> cloud;
     pcl::fromROSMsg(*pointcloud, cloud);
     if(cloud.points.empty())
@@ -169,7 +171,7 @@ void FreeNode::pointcloud_callback(const sensor_msgs::PointCloud2ConstPtr& point
         return;
     }
 
-    ROS_INFO("lidar_transform: pointcloud recieved,%zu points",cloud.points.size());
+    ROS_DEBUG("lidar_transform: pointcloud received,%zu points",cloud.points.size());
 
     geometry_msgs::TransformStamped transformStamped;
     Eigen::Isometry3d transform;
@@ -177,7 +179,7 @@ void FreeNode::pointcloud_callback(const sensor_msgs::PointCloud2ConstPtr& point
     ros::Time transform_time = pointcloud->header.stamp;
     try{
         //等待点云时间戳对应的tf可用
-        if(!tf_buffer->canTransform(map_tf_frame,sensor_tf_frame,transform_time,ros::Duration(0.5)))
+        if(!tf_buffer->canTransform(map_tf_frame,sensor_tf_frame,transform_time,ros::Duration(0.01)))
         {
             ROS_WARN_STREAM("no tf available from frame: " << map_tf_frame << "to frame: " << sensor_tf_frame << "at time: " << transform_time.toSec());
             return;
@@ -190,13 +192,47 @@ void FreeNode::pointcloud_callback(const sensor_msgs::PointCloud2ConstPtr& point
         return;
     }
 
-    static_map.pointcloud_integrate(cloud,transform);
+    visualizer.set_source_stamp(pointcloud->header.stamp);
+    static_map->pointcloud_integrate(cloud,transform);
 }
 
 void FreeNode::save_map_callback(const std_msgs::Empty::ConstPtr& msg)
 {
     ROS_INFO("Received save map trigger. Saving map...");
-    static_map.save_map(save_map_path);
+    static_map->save_map(save_map_path);
     ROS_INFO("Static map saved successfully to %s",save_map_path.c_str());
+}
+
+void FreeNode::create_map()
+{
+    // Destruct the old owning map; never shallow-copy its raw voxel pointers.
+    static_map.reset(new FreeDOM());
+    static_map->set_params(map_config);
+    if(enable_visualization) {
+        static_map->set_scan_removal_callback([this](const ScanMap& scan){visualizer.visualize_scan_removal_result(scan);});
+        static_map->set_map_removal_callback([this](const MRMap& map){visualizer.visualize_map_removal_result(map);});
+    }
+    // The original core invokes this callback even with visualization off.
+    static_map->set_raycast_enhancement_callback([this](const DepthImage& image){
+        if(enable_visualization) visualizer.visualize_raycast_enhancement_result(image);
+    });
+}
+bool FreeNode::reset_map(std_srvs::Trigger::Request&,std_srvs::Trigger::Response& response)
+{
+    const auto now=ros::Time::now();
+    bool admitted=false;
+    ros::param::get("/navigation_observation/rebuilding",admitted);
+    const double a=(now-state_received).toSec(),b=(now-landed_received).toSec();
+    const double source_a=(now-state.header.stamp).toSec(),source_b=(now-landed.header.stamp).toSec();
+    if(!admitted || !state.connected || state.armed || a<0. || a>.5 || b<0. || b>.5 ||
+       state.header.stamp.isZero() || landed.header.stamp.isZero() ||
+       source_a<0. || source_a>.5 || source_b<0. || source_b>.5 ||
+       landed.landed_state!=mavros_msgs::ExtendedState::LANDED_STATE_ON_GROUND) {
+        response.message="requires coordinator admission and fresh disarmed/on-ground FC"; return true;
+    }
+    create_map(); minimum_cloud_stamp=ros::Time::now();
+    ROS_INFO("FreeDOM ground rebuild at source-time fence %.9f",minimum_cloud_stamp.toSec());
+    response.success=true; response.message="FreeDOM reset; source-time fence advanced";
+    return true;
 }
 }

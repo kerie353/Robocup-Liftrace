@@ -7,6 +7,10 @@
   <arg name="camera_info_topic" default="/camera/camera_info" />
   <arg name="camera_optical_frame" default="downward_camera_optical_frame" />
   <arg name="map_frame" default="camera_init" />
+  <arg name="observation_enabled" default="false" />
+  <arg name="freedom_threads" default="$(eval 2 if arg('observation_enabled') else 8)" />
+  <param name="/navigation_observation/enabled" value="$(arg observation_enabled)" />
+  <rosparam file="$(find uav_mission)/config/observation_map.yaml" />
   <arg name="height_constraint_enabled" default="true" />
   <param name="/navigation_height_constraint/enabled" value="$(arg height_constraint_enabled)" />
   <param name="/navigation_height_constraint/frame_id" value="$(arg map_frame)" />
@@ -34,9 +38,10 @@
   <include file="$(find freedom)/launch/run_freedom_mid360.launch">
     <arg name="enable_static_pointcloud_viz" value="false" />
   </include>
-  <param name="/freedom/sensor_tf_frame" value="mapping_imu" />
+  <param name="/freedom/sensor_tf_frame" value="body" />
   <rosparam ns="/freedom" file="$(find uav_mission)/config/competition_freedom.yaml" />
   <param name="/freedom/map_tf_frame" value="$(arg map_frame)" />
+  <param name="/freedom/num_threads" value="$(arg freedom_threads)" type="int" />
   <node pkg="uav_mission" type="lio_external_pose.py" name="lio_external_pose" output="screen">
     <param name="frame" value="$(arg map_frame)" />
     <rosparam param="imu_to_body_xyz" subst_value="true">$(eval [-float(v) for v in arg('body_to_imu_xyz').split()])</rosparam>

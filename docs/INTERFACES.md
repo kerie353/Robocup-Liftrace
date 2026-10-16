@@ -1,5 +1,7 @@
 # 当前运行链与计算图
 
+2026-10-16 本地动态地图候选：当前实机入口统一 FreeDOM 输入的原生 `body` TF，保留视觉/控制 `mapping_imu` 链。开启 `observation_map_enabled` 时，真实 body 点云和 FreeDOM 候选进入 plan_env 观测 worker，现有 SDF/ESDF 使用观测快照，MissionManager 使用 `/navigation/observed_obstacles` 和 `/navigation/observation_ready`（Header，源时间、独立代次）；原 `/freedom/static_pointcloud` 保留诊断/候选语义。地面协调 `/navigation/rebuild_map` 调用任务准入 `/navigation/prepare_map_rebuild` 和 FreeDOM 内部 `/freedom/reset_map`；不增加硬件控制输出。新功能默认关闭，尚未编译/运行。完整[接口与拒绝条件](DYNAMIC_OBSTACLE_MAPPING.md)。
+
 [R64三版rqt_graph Nodes only图](topology/r64/README.md)来自固定seed11完整PASS运行的ROS Master注册快照。全图36节点，核心22节点，仅飞行23节点。椭圆为节点，连线文字为话题，箭头为发布→订阅，服务不画成话题。2026-09-09离线更新，无新仿真。
 
 Mission Manager负责搜索、目标事务、投后路线和降落；Planner Bridge是唯一`/fastplanner/goal`发布者；Fast-Planner→轨迹服务器→patrol_control→MAVROS。视觉包括检测、融合/精修、投影、目标记忆和对准。R63恢复保持与R64 PX4重置修复没有新增第二套任务权威。

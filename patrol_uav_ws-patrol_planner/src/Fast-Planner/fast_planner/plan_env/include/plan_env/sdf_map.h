@@ -28,6 +28,12 @@
 
 #include <Eigen/Eigen>
 #include <plan_env/search_region.h>
+#include <plan_env/observation_worker.h>
+#include <mavros_msgs/State.h>
+#include <mavros_msgs/ExtendedState.h>
+#include <std_msgs/Header.h>
+#include <std_msgs/String.h>
+#include <std_srvs/Trigger.h>
 #include <Eigen/StdVector>
 #include <cv_bridge/cv_bridge.h>
 #include <geometry_msgs/PoseStamped.h>
@@ -37,6 +43,7 @@
 #include <queue>
 #include <ros/ros.h>
 #include <tuple>
+#include <deque>
 #include <visualization_msgs/Marker.h>
 
 #include <pcl/point_cloud.h>
@@ -246,12 +253,39 @@ public:
   uint64_t recoveryRevision() const { return recovery_revision_; }
   ros::Time recoveryStamp() const { return recovery_stamp_; }
   std::string recoveryFrame() const { return mp_.frame_id_; }
+  bool observationEnabled() const { return observation_enabled_; }
+  bool observationFresh() const;
+  bool observationCovered(const Eigen::Vector3d& pos) const;
+  uint32_t observationGeneration() const { return observation_generation_; }
 
   typedef std::shared_ptr<SDFMap> Ptr;
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
 private:
+  void initObservation();
+  void observationTimer(const ros::TimerEvent&);
+  bool rebuildObservation(std_srvs::Trigger::Request&,std_srvs::Trigger::Response&);
+  void invalidateObservation();
+  bool observationColumn(const pcl::PointXYZ& p) const;
+  bool observation_enabled_=false, applying_observation_=false, observation_resetting_=false;
+  double observation_epoch_=0., observation_warmup_=2.;
+  double observation_first_=0., observation_last_=0.;
+  double observation_body_xy_=.275, observation_body_up_=.20, observation_body_down_=.20;
+  uint32_t observation_generation_=1;
+  std::unique_ptr<fast_planner::ObservationWorker> observation_worker_;
+  std::shared_ptr<const fast_planner::ObservationGrid::Snapshot> observation_snapshot_;
+  ros::Timer observation_timer_;
+  ros::Publisher observation_cloud_pub_,observation_ready_pub_,observation_diagnostics_pub_;
+  ros::WallTime observation_diagnostics_at_;
+  std::deque<double> observation_worker_samples_,observation_apply_samples_,observation_age_samples_;
+  ros::ServiceServer observation_reset_srv_;
+  ros::Subscriber observation_fc_sub_,observation_landed_sub_;
+  mavros_msgs::State observation_fc_;
+  mavros_msgs::ExtendedState observation_landed_;
+  ros::Time observation_fc_received_,observation_landed_received_;
+  ros::Time observation_odom_stamp_;
+  Eigen::Vector3d observation_min_=Eigen::Vector3d::Zero(),observation_max_=Eigen::Vector3d::Zero();
   MappingParameters mp_;
   MappingData md_;
   bool recovery_layers_enabled_ = false;
@@ -337,6 +371,7 @@ inline void SDFMap::boundIndex(Eigen::Vector3i& id) {
 }
 
 inline double SDFMap::getDistance(const Eigen::Vector3d& pos) {
+  if (observation_enabled_ && !observationCovered(pos)) return 0.;
   Eigen::Vector3i id;
   posToIndex(pos, id);
   boundIndex(id);
@@ -346,6 +381,11 @@ inline double SDFMap::getDistance(const Eigen::Vector3d& pos) {
 }
 
 inline double SDFMap::getDistance(const Eigen::Vector3i& id) {
+  if (observation_enabled_) {
+    if (!isInMap(id)) return 0.;
+    Eigen::Vector3d point; indexToPos(id,point);
+    if (!observationCovered(point)) return 0.;
+  }
   Eigen::Vector3i id1 = id;
   boundIndex(id1);
   const double d = md_.distance_buffer_all_[toAddress(id1)];
@@ -354,6 +394,8 @@ inline double SDFMap::getDistance(const Eigen::Vector3i& id) {
 }
 
 inline bool SDFMap::isUnknown(const Eigen::Vector3i& id) {
+  if(observation_enabled_) return !observationFresh() || !isInMap(id) ||
+      observation_snapshot_->states[toAddress(id)]==fast_planner::ObservationGrid::UNKNOWN;
   Eigen::Vector3i id1 = id;
   boundIndex(id1);
   return md_.occupancy_buffer_[toAddress(id1)] < mp_.clamp_min_log_ - 1e-3;
@@ -366,6 +408,9 @@ inline bool SDFMap::isUnknown(const Eigen::Vector3d& pos) {
 }
 
 inline bool SDFMap::isKnownFree(const Eigen::Vector3i& id) {
+  if(observation_enabled_) return observationFresh() && isInMap(id) &&
+      observation_snapshot_->states[toAddress(id)]==fast_planner::ObservationGrid::FREE &&
+      md_.occupancy_buffer_inflate_[toAddress(id)]==0;
   Eigen::Vector3i id1 = id;
   boundIndex(id1);
   int adr = toAddress(id1);
@@ -462,10 +507,16 @@ inline int SDFMap::getOccupancy(Eigen::Vector3d pos) {
   Eigen::Vector3i id;
   posToIndex(pos, id);
 
+  if(observation_enabled_) {
+    if(isUnknown(id)) return -1;
+    return observation_snapshot_->states[toAddress(id)]>=fast_planner::ObservationGrid::RECENT ? 1:0;
+  }
+
   return md_.occupancy_buffer_[toAddress(id)] > mp_.min_occupancy_log_ ? 1 : 0;
 }
 
 inline int SDFMap::getInflateOccupancy(Eigen::Vector3d pos) {
+  if (observation_enabled_ && !observationCovered(pos)) return 1;
   if (mp_.search_region_enabled_ && fast_planner::searchRegionDistance(pos, mp_.search_region_bounds_) <= 0.0) return 1;
   if (!isInMap(pos)) return -1;
   if (mp_.virtual_ceil_height_ > 0.0 && pos.z() >= mp_.virtual_ceil_height_) return 1;
@@ -480,6 +531,11 @@ inline int SDFMap::getOccupancy(Eigen::Vector3i id) {
   if (id(0) < 0 || id(0) >= mp_.map_voxel_num_(0) || id(1) < 0 || id(1) >= mp_.map_voxel_num_(1) ||
       id(2) < 0 || id(2) >= mp_.map_voxel_num_(2))
     return -1;
+
+  if(observation_enabled_) {
+    if(isUnknown(id)) return -1;
+    return observation_snapshot_->states[toAddress(id)]>=fast_planner::ObservationGrid::RECENT ? 1:0;
+  }
 
   return md_.occupancy_buffer_[toAddress(id)] > mp_.min_occupancy_log_ ? 1 : 0;
 }

@@ -1,5 +1,7 @@
 # 环境与构建
 
+2026-10-16 动态地图候选在 plan_env 增加一个持久 C++ worker，直接依赖 tf2_ros、mavros_msgs、std_srvs 和线程库；FreeDOM 的地面重建保护声明 mavros_msgs/std_srvs。沿用已安装 ROS Noetic，不安装新 Python/推理依赖，不改 LIO/RKNN 资源配置。本轮按用户要求未编译；首次启用前须另行构建并检查消息目标和完整链接。[参数与负载边界](DYNAMIC_OBSTACLE_MAPPING.md)。
+
 2026-09-11 驱动迁移：当前源码统一使用 **livox_ros_driver2 + Livox SDK2**；仿真仍由 Gazebo 发布 PointCloud2。两类源码包均需 SDK2 才能编译完整导航工作区，旧版本压缩包不会自动更新。[构建与实机接线说明](deployment/LIVOX_DRIVER2.md)。
 
 

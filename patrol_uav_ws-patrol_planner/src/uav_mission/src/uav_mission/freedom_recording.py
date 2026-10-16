@@ -17,10 +17,12 @@ import time
 import uuid
 
 DEFAULT_INPUT = '/cloud_registered_body'
-MAP_TOPICS = ['/freedom/static_pointcloud', '/sdf_map/occupancy', '/sdf_map/occupancy_inflate']
+MAP_TOPICS = ['/freedom/static_pointcloud', '/sdf_map/occupancy', '/sdf_map/occupancy_inflate',
+              '/navigation/observed_obstacles']
 CONTEXT_TOPICS = ['/tf', '/tf_static', '/Odometry', '/laserMapping/realtime',
                   '/mavros/vision_pose/pose', '/mavros/local_position/pose',
-                  '/mavros/local_position/odom', '/mavros/state', '/board_trials/run_metadata']
+                  '/mavros/local_position/odom', '/mavros/state', '/board_trials/run_metadata',
+                  '/navigation/observation_ready', '/navigation/observation_diagnostics']
 FINAL_STATES = ('complete', 'partial', 'failed', 'not_applicable')
 
 
@@ -350,7 +352,8 @@ def run(directory, parent, parent_start):
                     content=source.read_bytes();dest=configs/name
                     if not dest.is_file() or dest.read_bytes()!=content:
                         temp=dest.with_name(dest.name+'.tmp');temp.write_bytes(content);os.replace(str(temp),str(dest))
-            for key in ['/freedom','/laserMapping','/common','/preprocess','/mapping','/publish','/lio_external_pose']:
+            for key in ['/freedom','/laserMapping','/common','/preprocess','/mapping','/publish','/lio_external_pose',
+                        '/navigation_observation','/fast_planner_node/sdf_map/observation']:
                 if rospy.has_param(key):recorder.effective[key]=rospy.get_param(key)
             atomic_json(out/'effective_parameters.json',recorder.effective)
             recorder.check_budget();recorder.status()

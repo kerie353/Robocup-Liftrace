@@ -90,7 +90,7 @@ private:
     cv::Range image_col_range;
 
     // learn fov mask
-    bool learn_fov;
+    bool learn_fov=false;
     unsigned int scan_count;
     std::unique_ptr<cv::Mat> average_image;
 

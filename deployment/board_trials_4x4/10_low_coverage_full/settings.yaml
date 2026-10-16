@@ -1,5 +1,5 @@
 # 牛耕整场备份：投递/H参数在加载时继承模块08，不在这里另存旧副本。
-# 必须显式提供现场site-config；此模板没有可直接飞行的默认场地。
+# 默认加载同目录已登记现场YAML；显式site-config可覆盖，缺文件拒绝启动。
 backup_profile: low_coverage_full
 mode: low_multi_full
 trial_kind: low_multi_corridor

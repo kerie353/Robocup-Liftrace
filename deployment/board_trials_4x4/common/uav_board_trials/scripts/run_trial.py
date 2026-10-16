@@ -40,7 +40,10 @@ def main():
     for key in ('map_timeout','state_max_age'):
         if not math.isfinite(float(startup[key])) or float(startup[key])<=0:raise ValueError('invalid mapping startup '+key)
     if a.site_config is None and a.trial in ('full_mission','low_coverage_full'):
-        a.site_config=base/folder/'site_waypoint_map_20261015.yaml'
+        site_name=('site_waypoint_map_20261016.yaml' if a.trial=='full_mission' else
+                   'site_nested_rectangles_20261016.yaml' if a.coverage_pattern=='nested_rectangles' else
+                   'site_lawnmower_20261016.yaml')
+        a.site_config=base/folder/site_name
         if not a.site_config.is_file():
             p.error('Registered default site config not found: '+str(a.site_config))
     if a.site_config:

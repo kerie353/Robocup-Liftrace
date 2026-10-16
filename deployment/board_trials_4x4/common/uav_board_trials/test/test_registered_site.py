@@ -6,7 +6,9 @@ from trial_config import apply_site_profile,load_trial_settings,validate_setting
 ROOT=Path(__file__).resolve().parents[5]
 BASE=ROOT/'deployment/board_trials_4x4'
 SCRIPT=BASE/'common/uav_board_trials/scripts/run_trial.py'
-NAME='site_waypoint_map_20261015.yaml'
+NAME='site_waypoint_map_20261016.yaml'
+def site_name(folder):
+    return NAME if folder=='08_full_mission' else 'site_lawnmower_20261016.yaml'
 
 
 class RegisteredSite(unittest.TestCase):
@@ -34,7 +36,7 @@ class RegisteredSite(unittest.TestCase):
                     self.assertEqual(value['low_agl'],height)
                     self.assertEqual(value['coverage_pattern'],pattern)
                     self.assertEqual(len(runtime['trial']['waypoints']),count)
-                    self.assertEqual(value['landing_xy'],[8.3,-3.5])
+                    self.assertEqual(value['landing_xy'],[7.51,-3.85])
                     self.assertEqual(value['drop_agl'],.25)
                     self.check_speed(value,out_runtime=runtime)
 
@@ -45,11 +47,11 @@ class RegisteredSite(unittest.TestCase):
         for key,expected in dict(high_agl=2.6,max_agl=3.2,low_agl=1.4,
                                  survey_pattern='rectangle',landing_capture_agl=1.1,drop_agl=.25).items():
             self.assertEqual(value[key],expected,key)
-        self.assertEqual(value['flight_area']['search_bounds'],[-.1,7.05,-4.35,4.35])
+        self.assertEqual(value['flight_area']['search_bounds'],[-1.34,6.56,-4.85,4.85])
         self.assertEqual(value['flight_area']['survey_xy'],[[1,-3.5],[5.5,-3.5],[5.5,3.5],[1,3.5],[1,-3.5]])
         self.assertEqual(value['flight_area']['map_size'],[22,12,4])
-        self.assertEqual(value['landing_xy'],[8.3,-3.5])
-        self.assertEqual(len(value['corridor_waypoints']),5)
+        self.assertEqual(value['landing_xy'],[7.51,-3.85])
+        self.assertEqual(len(value['corridor_waypoints']),6)
         self.assertIn('mission',runtime)
         self.check_speed(value,out_runtime=runtime)
 
@@ -61,14 +63,14 @@ class RegisteredSite(unittest.TestCase):
                 (root/name).symlink_to(ROOT/name,target_is_directory=True)
             for trial,folder in (('full_mission','08_full_mission'),('low_coverage_full','10_low_coverage_full')):
                 with self.subTest(trial=trial):
-                    default=root/'deployment/board_trials_4x4'/folder/NAME
+                    default=root/'deployment/board_trials_4x4'/folder/site_name(folder)
                     override=yaml.safe_load(default.read_text())
-                    override['landing_xy']=[8.2,-3.4]
+                    override['landing_xy']=[7.6,-3.4]
                     explicit=root/(trial+'.yaml')
                     explicit.write_text(yaml.safe_dump(override))
                     result,data,_=self.run_cli(trial,'--site-config',str(explicit),root=root)
                     self.assertEqual(result.returncode,0,result.stderr)
-                    self.assertEqual(data['settings']['landing_xy'],[8.2,-3.4])
+                    self.assertEqual(data['settings']['landing_xy'],[7.6,-3.4])
                     default.unlink()
                     result,_,_=self.run_cli(trial,root=root)
                     self.assertNotEqual(result.returncode,0)
@@ -76,7 +78,7 @@ class RegisteredSite(unittest.TestCase):
                     self.assertIn(str(default),result.stderr)
                     result,data,_=self.run_cli(trial,'--site-config',str(explicit),root=root)
                     self.assertEqual(result.returncode,0,result.stderr)
-                    self.assertEqual(data['settings']['landing_xy'],[8.2,-3.4])
+                    self.assertEqual(data['settings']['landing_xy'],[7.6,-3.4])
                     result,_,_=self.run_cli(trial,'--site-config',str(root/'missing.yaml'),root=root)
                     self.assertNotEqual(result.returncode,0)
 
@@ -112,7 +114,7 @@ class RegisteredSite(unittest.TestCase):
     def test_both_modules_keep_all_waypoints_inside_flight_area(self):
         for folder in ('08_full_mission','10_low_coverage_full'):
             value=load_trial_settings(ROOT,folder)
-            apply_site_profile(value,yaml.safe_load((BASE/folder/NAME).read_text()))
+            apply_site_profile(value,yaml.safe_load((BASE/folder/site_name(folder)).read_text()))
             if folder.startswith('10'):
                 from trial_low_coverage import prepare_low_coverage
                 prepare_low_coverage(value,site_provided=True)

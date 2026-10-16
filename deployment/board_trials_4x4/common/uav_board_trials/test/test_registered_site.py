@@ -40,6 +40,23 @@ class RegisteredSite(unittest.TestCase):
                     self.assertEqual(value['drop_agl'],.25)
                     self.check_speed(value,out_runtime=runtime)
 
+    def test_shiftback_is_explicit_only_and_preserves_corridor(self):
+        for pattern in ('lawnmower','nested_rectangles'):
+            result,default,rt=self.run_cli('low_coverage_full','--coverage-pattern',pattern)
+            self.assertEqual(result.returncode,0,result.stderr)
+            path=BASE/'10_low_coverage_full'/('site_'+pattern+'_shiftback_1m_20261016.yaml')
+            result,shifted,srt=self.run_cli('low_coverage_full','--coverage-pattern',pattern,'--site-config',str(path))
+            self.assertEqual(result.returncode,0,result.stderr)
+            original=rt['trial']['waypoints'];candidate=srt['trial']['waypoints']
+            self.assertEqual(len(original),len(candidate))
+            for a,b in zip(original,candidate):
+                self.assertAlmostEqual(a[0]-1.,b[0])
+                self.assertEqual(a[1:],b[1:])
+            self.assertAlmostEqual(min(p[0] for p in original),1.)
+            self.assertAlmostEqual(max(p[0] for p in original),6.2)
+            for key in ('corridor_waypoints','landing_xy','landing_capture_agl'):
+                self.assertEqual(default['settings'][key],shifted['settings'][key])
+
     def test_full_default_geometry_and_heights(self):
         result,data,runtime=self.run_cli('full_mission')
         self.assertEqual(result.returncode,0,result.stderr)

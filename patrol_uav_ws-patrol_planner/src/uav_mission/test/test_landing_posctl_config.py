@@ -37,9 +37,9 @@ class LowHConfigTests(unittest.TestCase):
             control = yaml.safe_load((Path(path) / 'control.yaml').read_text())
         return ref, control
 
-    def check_profile(self, ref, control, mode, alignment='non_vh'):
+    def check_profile(self, ref, control, mode, alignment='non_vh', posctl_trigger=.40):
         landing = control['external_landing']
-        target, trigger = (.35, .40) if mode == 'POSCTL' else (.40, .55)
+        target, trigger = (.35, posctl_trigger) if mode == 'POSCTL' else (.40, .55)
         self.assertAlmostEqual(control['land_height'] - ref['ground_z'], target)
         self.assertAlmostEqual(landing['auto_land_height'] - ref['ground_z'], trigger)
         self.assertEqual(landing['alignment_tolerance'], .08)
@@ -74,9 +74,12 @@ class LowHConfigTests(unittest.TestCase):
             for mode in ('POSCTL', 'AUTO.LAND'):
                 with self.subTest(name=name, mode=mode):
                     settings['landing_handoff_mode'] = mode
+                    # This regression isolates handoff profiles, not preset-H fallback.
+                    settings['landing_coordinate_fallback'] = {'enabled': False}
                     settings['landing_alignment_mode'] = 'vh' if name in ('03_h_landing', '08_full_mission') and mode == 'POSCTL' else 'non_vh'
                     ref, control = self.generated(trial_generate, settings)
-                    self.check_profile(ref, control, mode, settings['landing_alignment_mode'])
+                    self.check_profile(ref, control, mode, settings['landing_alignment_mode'],
+                                       .50 if name == '08_full_mission' else .40)
 
     def test_all_hardware_templates_explicitly_declare_the_same_candidate(self):
         files = [ROOT / 'deployment/board_trials_4x4' / name / 'settings.yaml'
@@ -89,6 +92,8 @@ class LowHConfigTests(unittest.TestCase):
                 settings = yaml.safe_load(file.read_text())
                 self.assertEqual(settings['landing_handoff_mode'], 'POSCTL')
                 expected = dict(DEFAULTS)
+                if file.parent.name == '08_full_mission':
+                    expected['trigger_agl'] = .50  # Preserve current field handoff.
                 if file.name == 'field_20261007_validated.yaml':
                     # This confirmed field file is the preserved historical snapshot.
                     expected.update(trigger_agl=.37, height_tolerance_m=.02,

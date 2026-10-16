@@ -15,8 +15,6 @@ from test_external_landing_handoff import PROGRAM, PACKAGE, production_method
 
 
 FEEDBACK = r'''
-    ros::Time drop_alignment_started_, drop_timeout_last_check_;
-    bool drop_timeout_clock_invalid_=false;
     patrol_control::LandingHandoffStabilityConfig landing_settle_config_, landing_capture_config_;
     patrol_control::LandingHandoffStabilityWindow landing_capture_window_, landing_handoff_window_;
     patrol_control::LandingHighAlignmentWindow landing_high_alignment_window_;

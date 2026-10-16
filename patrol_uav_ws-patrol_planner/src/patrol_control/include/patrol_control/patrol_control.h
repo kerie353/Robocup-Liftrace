@@ -10,6 +10,7 @@
 #include "patrol_control/drop_slot_geometry.h"
 #include "patrol_control/landing_handoff_stability.h"
 #include "patrol_control/landing_high_alignment.h"
+#include "patrol_control/landing_coordinate_fallback.h"
 #include "patrol_control/drop_pre_descent_stability.h"
 #include "patrol_control/drop_descent_profile.h"
 #include "patrol_control/offboard_landing.h"
@@ -340,6 +341,9 @@ private:
     geometry_msgs::PoseStamped external_planner_height_hold_;
     std::string external_landing_frame_ = "camera_init";
     std::string external_landing_alignment_mode_ = "non_vh";
+    LandingCoordinateFallbackConfig landing_coordinate_fallback_config_;
+    LandingCoordinateFallback landing_coordinate_fallback_;
+    bool coordinateLandingFallbackReady();
     LandingHighAlignmentWindow landing_high_alignment_window_;
     ros::Publisher landing_vertical_cmd_pub_;
     // Reuse only the mathematical ramp; H has its own config and transaction.

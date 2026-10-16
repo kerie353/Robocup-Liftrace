@@ -32,6 +32,7 @@ def production_method(source, signature):
 
 PROGRAM = r'''
 #include "patrol_control/offboard_landing.h"
+#include "patrol_control/landing_coordinate_fallback.h"
 #include <functional>
 using namespace patrol_control;
 #include <array>
@@ -185,6 +186,11 @@ public:
     struct { int mode=1; } landing_descent_config_;
     SettlementWindowStub landing_descent_profile_;
     std::string external_landing_alignment_mode_="non_vh";
+    ros::Time drop_alignment_started_, drop_timeout_last_check_;
+    bool drop_timeout_clock_invalid_=false;
+    LandingCoordinateFallbackConfig landing_coordinate_fallback_config_;
+    LandingCoordinateFallback landing_coordinate_fallback_;
+    bool coordinateLandingFallbackReady() { return false; }
     SettlementWindowStub landing_high_alignment_window_;
     bool highLandingAlignmentReady() { return false; }
     SettlementWindowStub landing_capture_window_, landing_handoff_window_;
@@ -524,9 +530,10 @@ int main(int argc, char** argv) {
         c.uav_pose.pose.position.z=.401; c.externalLandingTick();
         assert(c.set_mode_client.calls==0);
         c.uav_pose.pose.position.z=.35; c.uav_pose.pose.position.x+=.081;
-        c.externalLandingTick(); assert(c.set_mode_client.calls==0);
-        c.uav_pose.pose.position.x-=.081; c.set_mode_client.mode_sent=false;
+        // 当前POSCTL交接只检查高度/反馈窗口，不再加一层XY门槛。
+        c.set_mode_client.mode_sent=false;
         c.externalLandingTick(); assert(c.set_mode_client.calls==1 && !c.flag_land);
+        c.uav_pose.pose.position.x-=.081;
         ros::clock=100.9; c.externalLandingTick(); assert(c.set_mode_client.calls==1);
         c.set_mode_client.mode_sent=true; ros::clock=101; state(c);
         c.externalLandingTick(); assert(c.set_mode_client.calls==2 && c.flag_land);

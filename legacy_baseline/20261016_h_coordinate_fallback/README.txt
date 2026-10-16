@@ -1,0 +1,1 @@
+新增H坐标兜底前的patrol_control完整源码快照，不参与编译。来源liftrace_board_trial_20260928@f78ca923436f82eae041be2178cf8a9030e64f05

@@ -79,6 +79,8 @@ class OffboardHelperContractTests(unittest.TestCase):
 class OffboardConfigTests(unittest.TestCase):
     def setUp(self):
         self.patch = yaml.safe_load(PATCH.read_text())
+        # Mode 4 remains opt-in and cannot inherit the POSCTL-only coordinate fallback.
+        self.patch['landing_coordinate_fallback'] = {'enabled': False}
         self.rig = yaml.safe_load((TRIAL / 'config/known_rig.yaml').read_text())
 
     def settings(self, name, formal=False):
@@ -203,8 +205,12 @@ class OffboardConfigTests(unittest.TestCase):
         env = dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path[:3]))
         script = TRIAL / 'scripts/run_trial.py'
         with tempfile.TemporaryDirectory() as tmp:
+            candidate = Path(tmp) / 'mode4.yaml'
+            candidate.write_text(yaml.safe_dump(self.patch))
+            disabled = Path(tmp) / 'fallback_disabled.yaml'
+            disabled.write_text(yaml.safe_dump({'landing_coordinate_fallback': {'enabled': False}}))
             command = [sys.executable, str(script), 'landing', 'preview', '--root', str(ROOT),
-                       '--landing-config', str(PATCH), '--check-config', '--generate-config', tmp,
+                       '--landing-config', str(candidate), '--check-config', '--generate-config', tmp,
                        '--reference-fc', '0', '0', '.09']
             result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -214,7 +220,7 @@ class OffboardConfigTests(unittest.TestCase):
             # The explicit switches also accept 4/high without a whole candidate file.
             command = [sys.executable, str(script), 'landing', 'preview', '--root', str(ROOT),
                        '--landing-descent-mode', '4', '--landing-handoff-mode', 'OFFBOARD',
-                       '--landing-alignment-mode', 'vh', '--check-config']
+                       '--landing-alignment-mode', 'vh', '--landing-config', str(disabled), '--check-config']
             result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             for option in ('--landing-descent-mode', '--landing-handoff-mode'):

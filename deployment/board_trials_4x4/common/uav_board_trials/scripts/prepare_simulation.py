@@ -9,6 +9,8 @@ def main():
     ap=argparse.ArgumentParser();ap.add_argument('trial',choices=[name for name in TRIAL_FOLDERS if name not in ('high_speed_capture','low_coverage_full')]);ap.add_argument('directory');args=ap.parse_args()
     package=Path(__file__).resolve().parents[1];root=package.parents[3];out=Path(args.directory);out.mkdir(parents=True,exist_ok=True)
     settings=yaml.safe_load((root/'deployment/board_trials_4x4'/TRIAL_FOLDERS[args.trial]/'settings.yaml').read_text())
+    # Measured-coordinate fallback is hardware-only; never inherit field enablement.
+    settings['landing_coordinate_fallback'] = dict(settings.get('landing_coordinate_fallback', {}), enabled=False)
     settings['camera_info_topic']='/downward_camera/camera_info'
     # Unattended SITL has no pilot for the hardware POSCTL terminal handoff.
     if args.trial in ('landing','corridor_landing','full_mission'):

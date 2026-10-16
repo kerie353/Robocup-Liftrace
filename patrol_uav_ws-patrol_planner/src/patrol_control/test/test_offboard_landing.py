@@ -154,7 +154,7 @@ BRANCHES = r"""
         DropDescentConfig d; OffboardLandingConfig o; o.ground_z=-.22;
         assert(o.valid() && std::abs(o.endpoint()+.04)<1e-9);
         for(int mode=1;mode<=3;++mode) { d.mode=mode; assert(d.valid()); assert(validLandingDescent(d,"POSCTL")); assert(!validLandingDescent(d,"OFFBOARD")); }
-        d.mode=4; assert(!d.valid()); assert(validLandingDescent(d,"OFFBOARD"));
+        d.mode=4; assert(d.valid()); assert(validLandingDescent(d,"OFFBOARD"));
         assert(!validLandingDescent(d,"POSCTL") && !validLandingDescent(d,"AUTO.LAND"));
         o.ground_z=0; assert(std::abs(o.endpoint()-.18)<1e-9);
         o.touchdown_overtravel=o.fc_clearance; assert(!o.valid());
@@ -168,9 +168,9 @@ class OffboardLandingTests(unittest.TestCase):
         source = (harness.PACKAGE / 'src/patrol_control.cpp').read_text(encoding='utf-8')
         start = source.index('    if (externalLandingOffboardDescentReady()) {')
         end = source.index('    // std::cout', start)
-        output = 'void LLController::runOutputLane() { bool vertical_landing=false, zero_velocity_drop=false;\n' + source[start:end] + '}\n'
+        output = 'void LLController::runOutputLane() { bool vertical_landing=false, zero_velocity_drop=false, vertical_speed_drop=false; double drop_vz_command=0;\n' + source[start:end] + '}\n'
         augmented = original.replace('    ros::Publisher external_landing_offboard_setpoint_pub_;',
-            '    ros::Publisher external_landing_offboard_setpoint_pub_, mavros_point_cmd_pub, landing_vertical_cmd_pub_, drop_vertical_cmd_pub_;\n    void runOutputLane();')
+            '    ros::Publisher external_landing_offboard_setpoint_pub_, mavros_point_cmd_pub, landing_vertical_cmd_pub_, drop_vertical_cmd_pub_, drop_velocity_cmd_pub_;\n    void runOutputLane();')
         harness.PROGRAM = augmented.replace('int main(int argc, char** argv)', output + CASES + '\nint main(int argc, char** argv)').replace(
             '    if (test=="settlement_stub") {', BRANCHES + '    if (test=="settlement_stub") {')
         try:

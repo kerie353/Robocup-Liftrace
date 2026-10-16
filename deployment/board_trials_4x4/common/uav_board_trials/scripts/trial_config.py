@@ -4,6 +4,7 @@ import math,copy,json,yaml,struct
 from uav_mission.landing_posctl_config import validate_landing_posctl, landing_control_parameters, landing_descent_parameters, landing_alignment_mode
 from uav_mission.landing_offboard_config import landing_offboard_parameters
 from uav_mission.drop_height_config import release_heights
+from uav_mission.landing_coordinate_fallback_config import landing_coordinate_fallback_parameters
 
 TRIAL_FOLDERS = {
     'visual_interrupt': '01_visual_interrupt', 'high_view': '02_high_view_revisit',
@@ -51,7 +52,7 @@ def apply_site_profile(settings, profile):
              'terminal_hover_agl','auto_start_after_arm','initialization_timeout','obstacle_columns_enabled',
              'bag_image_hz','bag_image_topic','record_inflated_cloud','record_map_clouds'}
     if settings['mode'] in H_MODES:
-        allowed.update(('landing_xy', 'landing_handoff_mode', 'landing_handoff_status_topic', 'landing_posctl', 'landing_alignment_mode', 'landing_descent_mode', 'landing_descent_speed_mps', 'landing_offboard'))
+        allowed.update(('landing_xy', 'landing_handoff_mode', 'landing_handoff_status_topic', 'landing_posctl', 'landing_alignment_mode', 'landing_descent_mode', 'landing_descent_speed_mps', 'landing_offboard', 'landing_coordinate_fallback'))
     if settings.get('mode') in ('low_multi','low_multi_full'):
         allowed.update(('search_waypoints_xy', 'landing_xy'))
     if settings.get('trial_kind') in ('full_mission','low_multi_corridor'):
@@ -152,6 +153,7 @@ def validate_settings(settings):
     if any(key in settings for key in ('landing_descent_mode', 'landing_descent_speed_mps')) and settings['mode'] not in H_MODES:
         raise ValueError('landing descent settings only apply to visual H landing')
     validate_landing_posctl(settings)
+    landing_coordinate_fallback_parameters(settings, external_land=settings['mode'] in H_MODES)
     if 'landing_handoff_status_topic' in settings:
         topic = settings['landing_handoff_status_topic']
         if settings['mode'] not in H_MODES:
@@ -365,6 +367,7 @@ def generate(root,out,settings,fc_xyz,rig):
     control['external_landing'].update(frame='camera_init',capture_height=capture if h_landing else low,auto_land_height=handoff_z,detections_topic='/uav_vision/detections_mapped' if h_landing else '/board_trials/h_disabled',handoff_mode=settings.get('landing_handoff_mode', 'AUTO.LAND'),handoff_status_topic=settings.get('landing_handoff_status_topic', '/patrol_control/external_landing_handoff'))
     if posctl_stability is not None:
         control['external_landing']['posctl'] = posctl_stability
+    control['external_landing']['coordinate_fallback'] = landing_coordinate_fallback_parameters(settings, external_land=h_landing)
     control['external_landing']['alignment_mode'] = landing_alignment_mode(settings)
     control['external_landing']['descent'] = landing_descent_parameters(settings)
     control['external_landing'].update(landing_offboard_parameters(settings, ground, float(rig['fc_ground_clearance'])))

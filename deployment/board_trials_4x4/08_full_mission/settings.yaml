@@ -62,3 +62,14 @@ resume_survey_enabled: true
 # 起飞专用 Z 领先量，单位米（非 m/s）；生产默认保守回退旧通用 3D 限幅。
 # 保留显式 [0.4, 0.6] 试验选项；回退不代表已证明领先量是全部偏高根因。
 takeoff_z_lead_m: 0.0
+
+# 仅用于实机外部 LAND：到达实测 H 预设点的 XY/Z 容差范围后开始计时。
+# 坐标兜底固定使用预设 H 中心，水平误差和速度持续达标后才下降。
+landing_coordinate_fallback:
+  enabled: true
+  wait_sec: 15.0
+  arrival_xy_tolerance_m: 0.20
+  arrival_z_tolerance_m: 0.15
+  descend_xy_tolerance_m: 0.08
+  max_horizontal_speed_mps: 0.10
+  stable_duration_sec: 0.30

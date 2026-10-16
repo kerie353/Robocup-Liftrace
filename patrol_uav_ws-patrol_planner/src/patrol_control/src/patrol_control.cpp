@@ -769,6 +769,7 @@ void LLController::externalLandingStateCallback(
 }
 
 void LLController::clearExternalLandingState(bool disable_detector) {
+    landing_coordinate_fallback_.reset();
     if (external_landing_active_ &&
         !(landing_descent_config_.mode == 4 && external_landing_handoff_observed_))
         publishExternalLandingHandoff("CANCELLED");
@@ -921,12 +922,12 @@ void LLController::externalLandingTick() {
     }
 
     const bool high_mode = external_landing_alignment_mode_ == "vh";
-    const bool high_ready = high_mode && !external_landing_alignment_complete_ &&
+    const bool high_ready = high_mode && !landing_coordinate_fallback_.active() && !external_landing_alignment_complete_ &&
         highLandingAlignmentReady();
     // Low acquisition retains ten fresh aligned frames. High acquisition uses
     // its independent one-second horizontal window, then freezes on a new H frame.
     if (external_landing_new_mark_) {
-        if (mark_fresh && !external_landing_alignment_complete_) {
+        if (mark_fresh && !external_landing_alignment_complete_ && !landing_coordinate_fallback_.active()) {
             const double horizontal_error = std::hypot(
                 uav_pose.pose.position.x - land_mark_point.pose.position.x,
                 uav_pose.pose.position.y - land_mark_point.pose.position.y);
@@ -959,10 +960,21 @@ void LLController::externalLandingTick() {
         external_landing_new_mark_ = false;
     }
 
+    // 视觉完成优先；兜底只在观察点计时到期后使用原LAND实测目标。
+    if (!external_landing_alignment_complete_ && coordinateLandingFallbackReady()) {
+        external_landing_alignment_complete_ = true;
+        external_landing_aligned_goal_ = external_landing_goal_;
+        external_landing_aligned_goal_.pose.position.z = land_height;
+        ROS_WARN("[ExternalLanding] coordinate fallback latched stage=enter_descend decision=%u "
+                 "center=(%.4f,%.4f) capture_z=%.4f descent_z=%.4f",
+                 external_landing_decision_seq_, external_landing_aligned_goal_.pose.position.x,
+                 external_landing_aligned_goal_.pose.position.y, external_landing_capture_height_, land_height);
+    }
+
     const geometry_msgs::PoseStamped& target =
         external_landing_alignment_complete_
             ? external_landing_aligned_goal_
-            : (mark_fresh ? land_mark_point : external_landing_goal_);
+            : (mark_fresh && !landing_coordinate_fallback_.active() ? land_mark_point : external_landing_goal_);
     adjust_target_position[0] = target.pose.position.x;
     adjust_target_position[1] = target.pose.position.y;
     adjust_target_position[2] = external_landing_alignment_complete_
@@ -2389,6 +2401,16 @@ void LLController::load_params() {
         (external_landing_alignment_mode_ == "vh" && external_landing_handoff_mode_ != "POSCTL" &&
          external_landing_handoff_mode_ != "OFFBOARD"))
         throw std::invalid_argument("H alignment_mode must be non_vh/vh; vh requires POSCTL or direct OFFBOARD");
+    landing_coordinate_fallback_config_.enabled = nh_.param("external_landing/coordinate_fallback/enabled", landing_coordinate_fallback_config_.enabled);
+    landing_coordinate_fallback_config_.wait_sec = nh_.param("external_landing/coordinate_fallback/wait_sec", landing_coordinate_fallback_config_.wait_sec);
+    landing_coordinate_fallback_config_.arrival_xy_tolerance_m = nh_.param("external_landing/coordinate_fallback/arrival_xy_tolerance_m", landing_coordinate_fallback_config_.arrival_xy_tolerance_m);
+    landing_coordinate_fallback_config_.arrival_z_tolerance_m = nh_.param("external_landing/coordinate_fallback/arrival_z_tolerance_m", landing_coordinate_fallback_config_.arrival_z_tolerance_m);
+    landing_coordinate_fallback_config_.descend_xy_tolerance_m = nh_.param("external_landing/coordinate_fallback/descend_xy_tolerance_m", landing_coordinate_fallback_config_.descend_xy_tolerance_m);
+    landing_coordinate_fallback_config_.max_horizontal_speed_mps = nh_.param("external_landing/coordinate_fallback/max_horizontal_speed_mps", landing_coordinate_fallback_config_.max_horizontal_speed_mps);
+    landing_coordinate_fallback_config_.stable_duration_sec = nh_.param("external_landing/coordinate_fallback/stable_duration_sec", landing_coordinate_fallback_config_.stable_duration_sec);
+    if (!landing_coordinate_fallback_config_.valid() ||
+        (landing_coordinate_fallback_config_.enabled && external_landing_handoff_mode_ != "POSCTL"))
+        throw std::invalid_argument("invalid H coordinate fallback; requires POSCTL");
     external_landing_handoff_topic_ = nh_.param<std::string>(
         "external_landing/handoff_status_topic", "/patrol_control/external_landing_handoff");
     external_landing_mode_transition_timeout_sec_ = nh_.param(
@@ -3910,6 +3932,7 @@ void LLController::missionCommandCallback(
             external_landing_handoff_hold_height_ = 0.0;
             external_landing_stable_count_ = 0;
             external_landing_started_at_ = ros::Time::now();
+            landing_coordinate_fallback_.reset();
             offboard_ground_confirmation_.reset(external_landing_started_at_.toSec());
             external_landing_last_disarm_attempt_ = ros::Time(0);
             external_landing_disarmed_pending_at_ = ros::Time(0);
@@ -4344,6 +4367,29 @@ void LLController::publishCompensatedAlignment() {
         externalLandingControlReady(ros::Time::now()))
         feedback.reason = "descent_timeout_ready";
     compensated_alignment_pub_.publish(feedback);
+}
+
+bool LLController::coordinateLandingFallbackReady() {
+    if (!landing_coordinate_fallback_config_.enabled || external_landing_handoff_mode_ != "POSCTL") return false;
+    const auto now = ros::Time::now();
+    Eigen::Vector3d velocity, angular;
+    const bool valid = freshMotion(&velocity, &angular) && externalLandingControlReady(now);
+    const auto& goal = external_landing_goal_.pose.position;
+    const auto& p = motion_odom_.pose.pose.position;
+    const double xy = std::max(std::hypot(uav_pose.pose.position.x-goal.x, uav_pose.pose.position.y-goal.y),
+                               std::hypot(p.x-goal.x, p.y-goal.y));
+    const double z_error = std::max(std::abs(uav_pose.pose.position.z-external_landing_capture_height_),
+                                    std::abs(p.z-external_landing_capture_height_));
+    const bool was_active = landing_coordinate_fallback_.active();
+    const bool ready = landing_coordinate_fallback_.update(landing_coordinate_fallback_config_,
+        now.toSec(), motion_odom_.header.stamp.toSec(), valid, xy, z_error,
+        valid ? velocity.head<2>().norm() : 0.0, landing_settle_config_.max_sample_gap_sec);
+    if (!was_active && landing_coordinate_fallback_.active())
+        ROS_WARN("[ExternalLanding] coordinate fallback activated decision=%u waited=%.2f center=(%.4f,%.4f)",
+                 external_landing_decision_seq_, landing_coordinate_fallback_.waited(now.toSec()), goal.x, goal.y);
+    if (landing_coordinate_fallback_.active() && !ready)
+        ROS_INFO_THROTTLE(1.0, "[ExternalLanding] coordinate fallback aligning xy=%.4f zerr=%.4f valid=%d", xy,z_error,valid);
+    return ready;
 }
 
 bool LLController::highLandingAlignmentReady() {

@@ -9,7 +9,7 @@ DEFAULTS = dict(descent_speed=0.30, touchdown_overtravel=0.04,
 DEFAULT_TOPIC = '/navigation/landing_setpoint_touchdown'
 OVERRIDE_KEYS = frozenset(('landing_handoff_mode', 'landing_alignment_mode',
                            'landing_descent_mode', 'landing_descent_speed_mps',
-                           'landing_offboard'))
+                           'landing_offboard', 'landing_coordinate_fallback'))
 
 
 def validate_landing_offboard(settings):

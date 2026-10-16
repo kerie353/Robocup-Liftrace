@@ -38,6 +38,7 @@ class CoordinateFallback(unittest.TestCase):
 
     def test_default_disabled_and_no_shared_mutation(self):
         a=parameters({});self.assertEqual(a,DEFAULTS);self.assertFalse(a['enabled'])
+        self.assertEqual(a['wait_sec'],15.0)  # 兼容库默认不跟随显式现场10秒设置。
         a['enabled']=True
         self.assertFalse(parameters({})['enabled'])
         self.assertFalse(parameters({'landing_handoff_mode':'AUTO.LAND'})['enabled'])
@@ -73,14 +74,34 @@ class CoordinateFallback(unittest.TestCase):
         for folder in ('03_h_landing','04_corridor_landing','08_full_mission','10_low_coverage_full'):
             with self.subTest(folder=folder):
                 s=self.settings(folder);original=copy.deepcopy(s);validate_settings(s)
-                self.assertEqual(s['landing_coordinate_fallback'],dict(DEFAULTS,enabled=True))
+                expected=dict(DEFAULTS,enabled=True,wait_sec=15.0 if folder=='04_corridor_landing' else 10.0)
+                self.assertEqual(s['landing_coordinate_fallback'],expected)
                 active=self.generated(s)
-                self.assertEqual(active['control']['external_landing']['coordinate_fallback'],dict(DEFAULTS,enabled=True))
+                self.assertEqual(active['control']['external_landing']['coordinate_fallback'],expected)
                 off=copy.deepcopy(s);off['landing_coordinate_fallback']['enabled']=False
                 baseline=self.generated(off)
                 active['control']['external_landing']['coordinate_fallback']['enabled']=False
                 self.assertEqual(active,baseline)
                 self.assertEqual(s,original)
+
+    def test_explicit_03_matches_08_and_generates_current_posctl_policy(self):
+        standalone=yaml.safe_load((BASE/'03_h_landing/settings.yaml').read_text())
+        full=yaml.safe_load((BASE/'08_full_mission/settings.yaml').read_text())
+        policy=lambda s:{k:v for k,v in s.items() if k.startswith('landing_') and k!='landing_xy'}
+        self.assertEqual(policy(standalone),policy(full))
+        for folder in ('03_h_landing','08_full_mission'):
+            with self.subTest(folder=folder):
+                s=self.settings(folder)
+                self.assertEqual((s['landing_alignment_mode'],s['landing_descent_mode'],
+                                  s['landing_descent_speed_mps']),('vh',2,1.0))
+                self.assertEqual((s['landing_posctl']['target_agl'],s['landing_posctl']['trigger_agl']),(.35,.50))
+                control=self.generated(s)['control']['external_landing']
+                self.assertEqual(control['alignment_mode'],'vh')
+                self.assertEqual(control['descent']['mode'],2)
+                self.assertEqual(control['descent']['speed_mps'],1.0)
+                self.assertEqual(control['handoff_mode'],'POSCTL')
+                self.assertAlmostEqual(control['auto_land_height']+.22,.50)
+                self.assertEqual(control['coordinate_fallback']['wait_sec'],10.0)
 
     def test_site_override_and_posctl_descent_modes_unchanged(self):
         s=self.settings()
@@ -132,6 +153,8 @@ class CoordinateFallback(unittest.TestCase):
                 data=json.loads(result.stdout.splitlines()[-1])
                 self.assertTrue(data['settings']['landing_coordinate_fallback']['enabled'])
                 control=yaml.safe_load((Path(out)/'control.yaml').read_text())
-                self.assertEqual(control['external_landing']['coordinate_fallback'],dict(DEFAULTS,enabled=True))
+                expected=dict(DEFAULTS,enabled=True,wait_sec=15.0 if trial=='corridor_landing' else 10.0)
+                self.assertEqual(data['settings']['landing_coordinate_fallback'],expected)
+                self.assertEqual(control['external_landing']['coordinate_fallback'],expected)
 
 if __name__=='__main__':unittest.main()

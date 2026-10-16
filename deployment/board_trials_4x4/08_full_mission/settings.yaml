@@ -67,7 +67,7 @@ takeoff_z_lead_m: 0.0
 # 坐标兜底固定使用预设 H 中心，水平误差和速度持续达标后才下降。
 landing_coordinate_fallback:
   enabled: true
-  wait_sec: 15.0
+  wait_sec: 10.0
   arrival_xy_tolerance_m: 0.20
   arrival_z_tolerance_m: 0.15
   descend_xy_tolerance_m: 0.08

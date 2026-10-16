@@ -91,13 +91,13 @@ def conflicts(master, caller):
     return blocked
 
 
-def main():
+def main(argv=None, controller_factory=Observation, preflight=None, node_name='low_hover_observation'):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode',choices=['preview','flight','localization-check'])
     parser.add_argument('--profile',choices=['hover','forward','square'],default='hover')
     parser.add_argument('--config',type=Path,default=HERE/'profiles.yaml')
     parser.add_argument('--output',type=Path)
-    args=parser.parse_args()
+    args=parser.parse_args(argv)
     c=yaml.safe_load(args.config.read_text());validate(c,args.profile)
     if args.mode=='preview':
         print(json.dumps(dict(profile=args.profile,fc_agl=c['height_agl'],
@@ -112,7 +112,7 @@ def main():
     from std_msgs.msg import String
     sys.path.insert(0,str(ROOT/'deployment/board_trials_4x4/common/uav_board_trials/scripts'))
     from mapping_startup import PoseAgreement
-    rospy.init_node('low_hover_observation',disable_signals=True)
+    rospy.init_node(node_name,disable_signals=True)
     if rospy.get_param('/use_sim_time',False):raise RuntimeError('hardware-only entry; simulation time refused')
     topics=dict(state='/mavros/state',pose='/mavros/local_position/pose',
                 ev='/mavros/vision_pose/pose',odom='/mavros/local_position/odom',
@@ -154,6 +154,8 @@ def main():
     (output/'profile.yaml').write_text(yaml.safe_dump(c,sort_keys=False))
     stopping=threading.Event()
     for sig in (signal.SIGINT,signal.SIGTERM):signal.signal(sig,lambda *unused:stopping.set())
+    # 临时专项只在地面检查后准备资源；同用停止事件与本轮输出目录。
+    if preflight is not None:preflight(c,master,data,lock,topics,stopping,output)
     recording_log=(output/'recorder.log').open('w')
     recorder=subprocess.Popen([sys.executable,str(HERE/'record_diagnostics.py'),'--output',str(output/'recording'),
                                '--config',str(HERE/'recording.yaml')],stdout=recording_log,stderr=subprocess.STDOUT,start_new_session=True)
@@ -190,11 +192,11 @@ def main():
             if stopping.is_set():return
             raise RuntimeError('ground FC/LIO agreement or recorder not ready; no control commands published')
         with lock:origin=xyz_yaw(data['pose'][0])
-        controller=Observation(c,args.profile,origin,time.monotonic())
+        controller=controller_factory(c,args.profile,origin,time.monotonic())
         metadata=dict(profile=args.profile,origin_fc_local=list(origin),ground_local_z=origin[2]-c['fc_ground_clearance'],
                       fc_ground_clearance=c['fc_ground_clearance'],planned_goals=controller.goals,
                       wall_time=time.time(),monotonic=time.monotonic(),ros_time=rospy.Time.now().to_sec(),
-                      purpose='motor_low_hover_observation_only',alignment='fc_local_route_position_agreement_only',
+                      purpose=c.get('purpose','motor_low_hover_observation_only'),alignment='fc_local_route_position_agreement_only',
                       require_fc_ev_yaw_agreement=c.get('require_fc_ev_yaw_agreement',False),
                       heading_lock='fresh_manual_offboard_entry',
                       altitude_is_estimate_not_range_measurement=True)
@@ -235,6 +237,7 @@ def main():
                             time=now,monotonic=wall,pose=pose,pose_stamp=stamp,pose_age=now-stamp if stamp else None,
                             target=target,mode=mode,armed=armed,recorder_alive=not recorder_failed,
                             route_origin=controller.origin,heading_locked=controller.ever_started)
+                if hasattr(controller,'status_details'):status.update(controller.status_details())
                 status_pub.publish(String(data=json.dumps(status)))
                 print(json.dumps(status),flush=True);last_status=wall;previous_stage=controller.stage
             if not announced and controller.stage=='READY' and connected and fresh and wall-controller.ready_at>=c['warmup_seconds']:

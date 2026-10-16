@@ -50,11 +50,21 @@ def validate(config, profile):
 class Observation:
     def __init__(self, config, profile, origin, now):
         validate(config,profile)
-        self.c=config;self.profile=profile;self.origin=origin;self.goals=route(config,profile,origin)
+        self.c=config;self.profile=profile;self.origin=origin;self.goals=self.make_route(origin)
         self.target=tuple(origin);self.stage='READY';self.reason='manual_arm_then_offboard'
         self.index=0;self.ready_at=now;self.started=None;self.previous_tick=now
         self.last_pose=None;self.last_stamp=None;self.arrival_since=None;self.dwell_since=None
         self.prev_mode=None;self.ever_started=False
+
+    # 临时专项通过继承替换路线/速度/停留，复用全部人工接管与时效保护。
+    def make_route(self, origin):
+        return route(self.c,self.profile,origin)
+
+    def leg_speed(self):
+        return self.c['climb_speed'] if self.index==0 else self.c['horizontal_speed']
+
+    def leg_duration(self):
+        return self.c['hover_seconds'] if self.index==0 else self.c['waypoint_seconds']
 
     def hold(self, reason, pose=None):
         if self.stage in ('TAKEN_OVER','HOLD_FOR_PILOT'):return
@@ -81,7 +91,7 @@ class Observation:
             if not armed:self.target=tuple(pose)
             if (armed and entered and now-self.ready_at>=self.c['warmup_seconds']):
                 self.origin=tuple(self.origin[:3])+(pose[3],)
-                self.goals=route(self.c,self.profile,self.origin)
+                self.goals=self.make_route(self.origin)
                 self.target=tuple(pose)
                 self.stage='RUN';self.started=now;self.ever_started=True
                 self.last_pose=tuple(pose);self.last_stamp=stamp
@@ -109,7 +119,7 @@ class Observation:
         # Ramp a setpoint, capped near feedback: no blind time-based march.
         delta=[goal[i]-self.target[i] for i in range(3)]
         distance=math.sqrt(sum(v*v for v in delta))
-        pace=self.c['climb_speed'] if self.index==0 else self.c['horizontal_speed']
+        pace=self.leg_speed()
         step=min(distance,pace*dt)
         next_xyz=[self.target[i]+(delta[i]*step/distance if distance else 0.) for i in range(3)]
         lead=math.dist(next_xyz,pose[:3])
@@ -123,7 +133,7 @@ class Observation:
         elif self.arrival_since is None:self.arrival_since=now
         elif now-self.arrival_since>=self.c['arrival_dwell']:
             if self.dwell_since is None:self.dwell_since=now
-            duration=self.c['hover_seconds'] if self.index==0 else self.c['waypoint_seconds']
+            duration=self.leg_duration()
             if now-self.dwell_since>=duration:
                 if self.index+1==len(self.goals):
                     self.stage='FINISHED_HOVER';self.reason='complete_manual_landing'

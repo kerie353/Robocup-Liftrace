@@ -25,6 +25,8 @@ def load_trial_settings(root, folder):
     """
     base = Path(root) / 'deployment/board_trials_4x4'
     settings = yaml.safe_load((base / folder / 'settings.yaml').read_text())
+    # 初始化最多等待五分钟；不放宽位姿、航向一致性或静止要求。
+    settings.setdefault("initialization_timeout", 300.0)
     if folder == '10_low_coverage_full':
         from trial_low_coverage import inherit_full_settings
         full = yaml.safe_load((base / '08_full_mission/settings.yaml').read_text())
@@ -194,7 +196,7 @@ def validate_settings(settings):
 
     if settings.get('alignment_mode','measured') not in ('measured','legacy_static'):
         raise ValueError('Unknown alignment_mode')
-    if not 30<=float(settings.get('initialization_timeout',90))<=300:raise ValueError('invalid initialization timeout')
+    if not 30<=float(settings.get('initialization_timeout',300))<=300:raise ValueError('invalid initialization timeout')
     if type(settings.get('auto_start_after_arm',False)) is not bool:raise ValueError('invalid auto start')
     max_agl=settings.get('max_agl',2.9)
     max_agl_limit=3.2 if settings['mode']=='high_view_full' or backup else 3.0

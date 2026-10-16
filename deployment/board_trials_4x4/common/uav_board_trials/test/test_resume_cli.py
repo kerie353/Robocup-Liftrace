@@ -44,6 +44,8 @@ class ResumeCLI(unittest.TestCase):
                 site=root/'site.yaml'
                 shutil.copyfile(BASE/'10_low_coverage_full/site_waypoint_map_20261015.yaml',site)
                 args+=['--site-config',str(site)]
+            if trial=='corridor_landing':
+                shutil.copyfile(BASE/'04_corridor_landing/site_waypoint_map_20261016.yaml',folder/'site_waypoint_map_20261016.yaml')
             if trial in ('full_mission','low_coverage_full'):
                 inherited=base/'08_full_mission'
                 if trial=='full_mission':

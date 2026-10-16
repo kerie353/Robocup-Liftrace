@@ -57,6 +57,15 @@ class RegisteredSite(unittest.TestCase):
             for key in ('corridor_waypoints','landing_xy','landing_capture_agl'):
                 self.assertEqual(default['settings'][key],shifted['settings'][key])
 
+    def test_corridor_default_matches_full_corridor_and_h(self):
+        result,corridor,_=self.run_cli('corridor_landing')
+        self.assertEqual(result.returncode,0,result.stderr)
+        result,full,_=self.run_cli('full_mission')
+        self.assertEqual(result.returncode,0,result.stderr)
+        for key in ('corridor_waypoints','corridor_geometry','landing_xy','landing_transit_agl','landing_capture_agl'):
+            self.assertEqual(corridor['settings'][key],full['settings'][key])
+        self.assertEqual(corridor['settings']['cruise_speed'],load_trial_settings(ROOT,'04_corridor_landing')['cruise_speed'])
+
     def test_full_default_geometry_and_heights(self):
         result,data,runtime=self.run_cli('full_mission')
         self.assertEqual(result.returncode,0,result.stderr)

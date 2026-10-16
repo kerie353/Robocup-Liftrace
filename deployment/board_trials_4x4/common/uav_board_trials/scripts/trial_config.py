@@ -55,7 +55,7 @@ def apply_site_profile(settings, profile):
     if settings.get('trial_kind') in ('full_mission','low_multi_corridor'):
         allowed.add('low_agl')
     if settings.get('trial_kind') in ('corridor_landing','full_mission','low_multi_corridor'):
-        allowed.update(('corridor_waypoints','corridor_geometry'))
+        allowed.update(('corridor_waypoints','corridor_geometry','landing_transit_agl','landing_capture_agl'))
     if settings.get('trial_kind') == 'full_mission':
         allowed.update(('survey_pattern','landing_transit_agl','landing_capture_agl'))
     if settings.get('backup_profile') == 'low_coverage_full':
